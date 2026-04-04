@@ -1,4 +1,5 @@
 from functools import wraps
+from datetime import datetime, timezone
 from typing import Dict, List
 from uuid import uuid4
 
@@ -46,6 +47,17 @@ def register_routes(app: Flask) -> None:
         auth_session_id = session.get("auth_session_id")
         g.user = get_user_by_id(app.config["SQLITE_PATH"], user_id) if user_id else None
         g.session_record = None
+
+        if not app.config["USE_PERSISTENT_AUTH_SESSIONS"]:
+            if g.user is None:
+                if not _is_public_endpoint() and user_id:
+                    return _handle_inactive_session("session_ended")
+                return None
+
+            if not auth_session_id:
+                _ensure_stateless_auth_session(g.user["id"])
+            g.session_record = _stateless_session_record(g.user["id"])
+            return None
 
         if g.user and not auth_session_id:
             auth_session_id = str(uuid4())
@@ -154,7 +166,7 @@ def register_routes(app: Flask) -> None:
     @login_required
     def logout():
         auth_session_id = session.get("auth_session_id")
-        if auth_session_id:
+        if auth_session_id and current_app.config["USE_PERSISTENT_AUTH_SESSIONS"]:
             end_user_session(app.config["SQLITE_PATH"], auth_session_id, reason="logout")
         session.clear()
         flash("You have been logged out.", "info")
@@ -167,7 +179,7 @@ def register_routes(app: Flask) -> None:
         reason = (payload.get("reason") or "manual_end").strip() or "manual_end"
         auth_session_id = session.get("auth_session_id")
 
-        if auth_session_id:
+        if auth_session_id and current_app.config["USE_PERSISTENT_AUTH_SESSIONS"]:
             end_user_session(app.config["SQLITE_PATH"], auth_session_id, reason=reason)
 
         session.clear()
@@ -183,6 +195,12 @@ def register_routes(app: Flask) -> None:
     @app.post("/session/activity")
     @login_required
     def session_activity():
+        if not current_app.config["USE_PERSISTENT_AUTH_SESSIONS"]:
+            if g.user is None:
+                return _json_session_ended("session_ended")
+            _touch_stateless_session()
+            return jsonify({"ok": True, "session": _serialize_session_record(g.session_record)})
+
         auth_session_id = session.get("auth_session_id")
         if not auth_session_id:
             return _json_session_ended("session_ended")
@@ -210,6 +228,18 @@ def register_routes(app: Flask) -> None:
     @app.get("/session/status")
     @login_required
     def session_status():
+        if not current_app.config["USE_PERSISTENT_AUTH_SESSIONS"]:
+            if g.user is None:
+                return _json_session_ended("session_ended")
+            return jsonify(
+                {
+                    "ok": True,
+                    "session": _serialize_session_record(g.session_record),
+                    "idleTimeoutSeconds": app.config["SESSION_IDLE_SECONDS"],
+                    "warningTimeoutSeconds": app.config["SESSION_WARNING_SECONDS"],
+                }
+            )
+
         auth_session_id = session.get("auth_session_id")
         if not auth_session_id:
             return _json_session_ended("session_ended")
@@ -494,9 +524,12 @@ def _sync_session_profile_to_user(user_id: str, profile: Dict[str, object]) -> N
 def _start_authenticated_session(user_id: str) -> Dict[str, object]:
     session.clear()
     auth_session_id = str(uuid4())
-    create_user_session(current_app.config["SQLITE_PATH"], session_id=auth_session_id, user_id=user_id)
     session["user_id"] = user_id
     session["auth_session_id"] = auth_session_id
+    session["auth_session_created_at"] = _utc_now_iso()
+    session["auth_session_last_activity"] = session["auth_session_created_at"]
+    if current_app.config["USE_PERSISTENT_AUTH_SESSIONS"]:
+        create_user_session(current_app.config["SQLITE_PATH"], session_id=auth_session_id, user_id=user_id)
     return {"user_id": user_id, "auth_session_id": auth_session_id}
 
 
@@ -504,9 +537,45 @@ def _refresh_authenticated_session() -> None:
     auth_session_id = session.get("auth_session_id")
     if not auth_session_id:
         return
+    if not current_app.config["USE_PERSISTENT_AUTH_SESSIONS"]:
+        _touch_stateless_session()
+        return
     updated = touch_user_session(current_app.config["SQLITE_PATH"], auth_session_id)
     if updated is not None:
         g.session_record = updated
+
+
+def _ensure_stateless_auth_session(user_id: str) -> None:
+    session["user_id"] = user_id
+    session["auth_session_id"] = session.get("auth_session_id") or str(uuid4())
+    session["auth_session_created_at"] = session.get("auth_session_created_at") or _utc_now_iso()
+    session["auth_session_last_activity"] = session.get("auth_session_last_activity") or session["auth_session_created_at"]
+    g.session_record = _stateless_session_record(user_id)
+
+
+def _touch_stateless_session() -> None:
+    if g.user is None:
+        return
+    session["auth_session_last_activity"] = _utc_now_iso()
+    g.session_record = _stateless_session_record(g.user["id"])
+
+
+def _stateless_session_record(user_id: str) -> Dict[str, object]:
+    created_at = session.get("auth_session_created_at") or _utc_now_iso()
+    last_activity = session.get("auth_session_last_activity") or created_at
+    return {
+        "session_id": session.get("auth_session_id"),
+        "user_id": user_id,
+        "is_active": True,
+        "last_activity_timestamp": last_activity,
+        "created_at": created_at,
+        "ended_at": None,
+        "end_reason": None,
+    }
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _handle_inactive_session(reason: str):

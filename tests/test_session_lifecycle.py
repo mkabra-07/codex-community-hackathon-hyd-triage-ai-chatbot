@@ -115,6 +115,30 @@ class SessionLifecycleTests(unittest.TestCase):
         self.assertFalse(session_record["is_active"])
         self.assertEqual(session_record["end_reason"], "idle_timeout")
 
+    def test_stateless_auth_mode_supports_login_and_chat_page(self):
+        original_persistent_sessions = Config.USE_PERSISTENT_AUTH_SESSIONS
+        Config.USE_PERSISTENT_AUTH_SESSIONS = False
+        try:
+            app = create_app()
+            app.config["TESTING"] = True
+            client = app.test_client()
+
+            response = client.post(
+                "/login",
+                data={"email": "aarav.sharma@careflow.app", "password": "aarav123"},
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 302)
+
+            page = client.get("/chat")
+            self.assertEqual(page.status_code, 200)
+
+            activity = client.post("/session/activity")
+            self.assertEqual(activity.status_code, 200)
+            self.assertTrue(activity.get_json()["session"]["isActive"])
+        finally:
+            Config.USE_PERSISTENT_AUTH_SESSIONS = original_persistent_sessions
+
 
 if __name__ == "__main__":
     unittest.main()
