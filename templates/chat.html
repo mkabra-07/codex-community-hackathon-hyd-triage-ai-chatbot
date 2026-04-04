@@ -10,9 +10,10 @@
           <div class="sidebar-header">
             <p class="eyebrow">Patient History</p>
             <h2>Previous chats</h2>
-            <p class="sidebar-copy">Review earlier sessions with timestamps and messages.</p>
+            <p class="sidebar-copy">Browse session summaries, then open any conversation when you need the full detail.</p>
           </div>
           <div id="historyTimeline" class="history-timeline"></div>
+          <button type="button" id="loadMoreSessionsButton" class="history-load-more" hidden>Load more</button>
         </div>
       </aside>
 
@@ -134,6 +135,7 @@
     const needsProfileCompletion = {{ 'true' if missing_fields else 'false' }};
     const initialChatState = {{ initial_chat_state|tojson }};
     const initialHistoryContext = {{ initial_history_context|tojson }};
+    const initialSessionsPage = {{ initial_sessions_page|tojson }};
     const initialMessage = {
       role: "assistant",
       text: needsProfileCompletion
@@ -154,21 +156,23 @@
     const debugPanelEl = document.getElementById("debugPanel");
     const debugTabEls = Array.from(document.querySelectorAll(".debug-tab"));
     const historyTimelineEl = document.getElementById("historyTimeline");
+    const loadMoreSessionsButtonEl = document.getElementById("loadMoreSessionsButton");
 
     let profileComplete = !needsProfileCompletion;
     let debugView = "summary";
     let lastFlowPayload = initialChatState;
+    let historyState = {
+      sessions: Array.isArray(initialSessionsPage.sessions) ? initialSessionsPage.sessions : [],
+      page: initialSessionsPage.page || 1,
+      perPage: initialSessionsPage.per_page || 15,
+      hasMore: Boolean(initialSessionsPage.has_more),
+      loading: false
+    };
     let sessionId = localStorage.getItem(`triage-session-id-{{ user.id }}`);
     if (!sessionId) {
       sessionId = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : `session-${Date.now()}`;
       localStorage.setItem(`triage-session-id-{{ user.id }}`, sessionId);
     }
-
-    renderMessage(initialMessage);
-    if (!needsProfileCompletion) {
-      updateFlowMeta(initialChatState);
-    }
-    renderHistoryTimeline(initialHistoryContext.session_timeline || []);
 
     debugTabEls.forEach((button) => {
       button.addEventListener("click", () => {
@@ -176,6 +180,10 @@
         debugTabEls.forEach((tab) => tab.classList.toggle("active", tab === button));
         updateFlowMeta(lastFlowPayload);
       });
+    });
+
+    loadMoreSessionsButtonEl.addEventListener("click", () => {
+      fetchSessionsPage(historyState.page + 1, { append: true });
     });
 
     if (!profileComplete) {
@@ -218,7 +226,7 @@
         });
         lastFlowPayload = payload;
         updateFlowMeta(payload);
-        refreshHistoryTimeline();
+        refreshSessions({ reset: true });
       } catch (error) {
         typingNode.remove();
         errorEl.hidden = false;
@@ -268,7 +276,26 @@
       });
     }
 
-      function renderMessage(message) {
+    boot();
+
+    async function boot() {
+      if (!needsProfileCompletion) {
+        updateFlowMeta(initialChatState);
+      }
+      renderSessionList(historyState.sessions);
+
+      const existingSession = historyState.sessions.find((item) => item.session_id === sessionId);
+      if (existingSession) {
+        await openSession(sessionId, { preserveActiveState: true });
+        return;
+      }
+
+      renderConversation([
+        initialMessage
+      ]);
+    }
+
+    function renderMessage(message) {
       const row = document.createElement("article");
       row.className = `bubble-row ${message.role === "user" ? "bubble-row-user" : ""}`;
 
@@ -319,6 +346,11 @@
       return row;
     }
 
+    function renderConversation(messages) {
+      messagesEl.innerHTML = "";
+      messages.forEach((message) => renderMessage(message));
+    }
+
     function renderTyping() {
       const row = document.createElement("article");
       row.className = "bubble-row";
@@ -361,68 +393,211 @@
       debugPanelEl.textContent = JSON.stringify(shown, null, 2);
     }
 
-    async function refreshHistoryTimeline() {
+    async function refreshSessions({ reset = false } = {}) {
+      const nextPage = reset ? 1 : historyState.page;
+      await fetchSessionsPage(nextPage, { append: !reset });
+    }
+
+    async function fetchSessionsPage(page, { append = false } = {}) {
+      if (historyState.loading) {
+        return;
+      }
+
+      historyState.loading = true;
+      loadMoreSessionsButtonEl.disabled = true;
+
       try {
-        const response = await fetch("/history");
+        const query = new URLSearchParams({
+          page: String(page),
+          per_page: String(historyState.perPage || 15)
+        });
+        const response = await fetch(`/sessions?${query.toString()}`);
         if (!response.ok) {
+          historyState.loading = false;
           return;
         }
+
         const payload = await response.json();
-        renderHistoryTimeline(payload.sessionTimeline || []);
+        const incomingSessions = Array.isArray(payload.sessions) ? payload.sessions : [];
+        historyState = {
+          sessions: append ? dedupeSessions(historyState.sessions.concat(incomingSessions)) : incomingSessions,
+          page: payload.page || page,
+          perPage: payload.perPage || historyState.perPage || 15,
+          hasMore: Boolean(payload.hasMore),
+          loading: false
+        };
+        renderSessionList(historyState.sessions);
       } catch (_error) {
+        historyState.loading = false;
+      } finally {
+        loadMoreSessionsButtonEl.disabled = false;
+        updateLoadMoreVisibility();
       }
     }
 
-    function renderHistoryTimeline(sessions) {
-      if (!sessions.length) {
+    async function openSession(nextSessionId, { preserveActiveState = false } = {}) {
+      try {
+        const response = await fetch(`/sessions/${encodeURIComponent(nextSessionId)}`);
+        if (!response.ok) {
+          throw new Error("Unable to load that chat session.");
+        }
+
+        const payload = await response.json();
+        sessionId = payload.session_id;
+        localStorage.setItem(`triage-session-id-{{ user.id }}`, sessionId);
+        renderSessionList(historyState.sessions);
+
+        const messages = (payload.messages || []).map((message) => ({
+          role: message.role,
+          text: message.message,
+          assessment: message.role === "assistant" && message.metadata ? message.metadata : null,
+          stage: message.metadata && message.metadata.stage ? message.metadata.stage : null
+        }));
+
+        if (!messages.length) {
+          renderConversation([{ role: "assistant", text: "New Chat" }]);
+        } else {
+          renderConversation(messages);
+        }
+
+        if (!preserveActiveState) {
+          errorEl.hidden = true;
+        }
+      } catch (error) {
+        errorEl.hidden = false;
+        errorEl.textContent = error.message || "Unable to load that chat session.";
+      }
+    }
+
+    function renderSessionList(sessions) {
+      const previousSessions = sessions.filter((session) => session.session_id !== sessionId);
+
+      if (!previousSessions.length) {
         historyTimelineEl.innerHTML = '<p class="history-empty">No previous chats yet.</p>';
+        updateLoadMoreVisibility();
         return;
       }
 
       historyTimelineEl.innerHTML = "";
-      sessions
-        .slice()
-        .reverse()
-        .forEach((session) => {
-          const details = document.createElement("details");
-          details.className = "history-session";
+      const groups = groupSessions(previousSessions);
 
-          const summary = document.createElement("summary");
-          summary.className = "history-session-summary";
-          summary.innerHTML = `
-            <div>
-              <strong>Session ${session.session_id.slice(0, 8)}</strong>
-              <p>${formatDate(session.started_at)} to ${formatDate(session.ended_at)}</p>
-            </div>
-            <span>${session.message_count} messages</span>
+      groups.forEach((group) => {
+        if (!group.sessions.length) {
+          return;
+        }
+
+        const section = document.createElement("section");
+        section.className = "history-group";
+
+        const heading = document.createElement("p");
+        heading.className = "history-group-label";
+        heading.textContent = group.label;
+        section.appendChild(heading);
+
+        group.sessions.forEach((session) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = `history-session-card${session.session_id === sessionId ? " active" : ""}`;
+          button.setAttribute("aria-pressed", session.session_id === sessionId ? "true" : "false");
+          button.innerHTML = `
+            <span class="history-session-icon" aria-hidden="true">AI</span>
+            <span class="history-session-content">
+              <strong class="history-session-title">${escapeHtml(session.summary || "New Chat")}</strong>
+              <span class="history-session-meta">${formatSessionMeta(session)}</span>
+            </span>
           `;
-          details.appendChild(summary);
-
-          const messages = document.createElement("div");
-          messages.className = "history-session-messages";
-
-          session.messages.forEach((message) => {
-            const item = document.createElement("article");
-            item.className = "history-message";
-            item.innerHTML = `
-              <p class="history-message-meta">${message.role} • ${formatDate(message.created_at)}</p>
-              <p class="history-message-text"></p>
-            `;
-            item.querySelector(".history-message-text").textContent = message.message;
-            messages.appendChild(item);
-          });
-
-          details.appendChild(messages);
-          historyTimelineEl.appendChild(details);
+          button.addEventListener("click", () => openSession(session.session_id));
+          section.appendChild(button);
         });
+
+        historyTimelineEl.appendChild(section);
+      });
+
+      updateLoadMoreVisibility();
+    }
+
+    function groupSessions(sessions) {
+      const groups = [
+        { label: "Today", sessions: [] },
+        { label: "Yesterday", sessions: [] },
+        { label: "Older", sessions: [] }
+      ];
+
+      sessions.forEach((session) => {
+        const bucket = sessionGroupLabel(session.created_at);
+        const target = groups.find((group) => group.label === bucket);
+        if (target) {
+          target.sessions.push(session);
+        }
+      });
+
+      return groups;
+    }
+
+    function sessionGroupLabel(value) {
+      const date = parseDate(value);
+      if (!date) {
+        return "Older";
+      }
+
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const candidate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+      const dayDiff = Math.round((today - candidate) / 86400000);
+
+      if (dayDiff <= 0) {
+        return "Today";
+      }
+      if (dayDiff === 1) {
+        return "Yesterday";
+      }
+      return "Older";
+    }
+
+    function formatSessionMeta(session) {
+      const timestamp = formatDate(session.created_at);
+      const countLabel = `${session.message_count} message${session.message_count === 1 ? "" : "s"}`;
+      return `${timestamp} • ${countLabel}`;
+    }
+
+    function updateLoadMoreVisibility() {
+      const hasVisiblePreviousSessions = historyState.sessions.some((session) => session.session_id !== sessionId);
+      loadMoreSessionsButtonEl.hidden = !historyState.hasMore || !hasVisiblePreviousSessions;
+    }
+
+    function dedupeSessions(sessions) {
+      const seen = new Map();
+      sessions.forEach((session) => {
+        seen.set(session.session_id, session);
+      });
+      return Array.from(seen.values());
+    }
+
+    function escapeHtml(value) {
+      const span = document.createElement("span");
+      span.textContent = value;
+      return span.innerHTML;
+    }
+
+    function parseDate(value) {
+      if (!value) {
+        return null;
+      }
+      const date = new Date(String(value).replace(" ", "T"));
+      return Number.isNaN(date.getTime()) ? null : date;
     }
 
     function formatDate(value) {
-      const date = new Date(value.replace(" ", "T"));
-      if (Number.isNaN(date.getTime())) {
+      const date = parseDate(value);
+      if (!date) {
         return value;
       }
-      return date.toLocaleString();
+      return date.toLocaleString([], {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit"
+      });
     }
   </script>
 {% endblock %}

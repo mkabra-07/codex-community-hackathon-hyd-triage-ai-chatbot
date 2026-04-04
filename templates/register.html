@@ -2,47 +2,101 @@
 
 {% block title %}Register | AI Healthcare Triage Chatbot{% endblock %}
 
+{% block extra_head %}
+  <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ["Sora", "ui-sans-serif", "system-ui", "sans-serif"]
+          },
+          boxShadow: {
+            soft: "0 30px 80px rgba(15, 23, 42, 0.14)"
+          }
+        }
+      }
+    };
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet" />
+{% endblock %}
+
 {% block body %}
-  <main class="auth-shell">
-    <section class="auth-card">
-      <p class="eyebrow">AI-Powered Triage</p>
-      <h1>Create account</h1>
-      <p class="auth-subtitle">Keep your profile across sessions so the chatbot stops repeating personal questions.</p>
+  <main class="min-h-screen overflow-hidden bg-[linear-gradient(180deg,#f8fffd_0%,#eef7ff_44%,#f6f1ff_100%)]">
+    <div class="mx-auto flex min-h-screen w-full max-w-7xl items-center px-4 py-6 sm:px-6 lg:px-8">
+      <div class="grid w-full gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+        {% set cta_label = "Go to Login" %}
+        {% set cta_href = url_for('login') %}
+        {% include "_auth_showcase.html" %}
 
-      {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-          {% for category, message in messages %}
-            <p class="flash-message flash-{{ category }}">{{ message }}</p>
-          {% endfor %}
-        {% endif %}
-      {% endwith %}
+        <section class="relative flex items-center">
+          <div class="relative w-full rounded-[32px] border border-slate-200/70 bg-white/90 p-6 shadow-soft backdrop-blur-xl sm:p-8 lg:p-10">
+            <p class="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">Create your account</p>
+            <h2 class="mt-3 text-3xl font-semibold tracking-tight text-slate-950">Get started in minutes</h2>
+            <p class="mt-3 max-w-md text-sm leading-7 text-slate-600">
+              Save profile details once, streamline future intake, and keep each conversation tied to the same patient account.
+            </p>
 
-      <form method="post" class="auth-form">
-        <label>
-          Full name
-          <input type="text" name="name" value="{{ form_data.name }}" required />
-        </label>
-        <label>
-          Gender
-          <select name="gender">
-            <option value="" {% if not form_data.gender %}selected{% endif %}>Prefer not to say</option>
-            <option value="female" {% if form_data.gender == 'female' %}selected{% endif %}>Female</option>
-            <option value="male" {% if form_data.gender == 'male' %}selected{% endif %}>Male</option>
-            <option value="non-binary" {% if form_data.gender == 'non-binary' %}selected{% endif %}>Non-binary</option>
-          </select>
-        </label>
-        <label>
-          Password
-          <input type="password" name="password" required />
-        </label>
-        <label>
-          Confirm password
-          <input type="password" name="confirm_password" required />
-        </label>
-        <button type="submit">Register</button>
-      </form>
+            {% with messages = get_flashed_messages(with_categories=true) %}
+              {% if messages %}
+                <div class="mt-6 space-y-3" aria-live="polite">
+                  {% for category, message in messages %}
+                    <p class="rounded-2xl border px-4 py-3 text-sm font-medium {% if category == 'error' %}border-rose-200 bg-rose-50 text-rose-700{% else %}border-sky-200 bg-sky-50 text-sky-700{% endif %}">
+                      {{ message }}
+                    </p>
+                  {% endfor %}
+                </div>
+              {% endif %}
+            {% endwith %}
 
-      <p class="auth-link">Already registered? <a href="{{ url_for('login') }}">Back to login</a></p>
-    </section>
+            <form method="post" class="mt-8 grid gap-5">
+              <div>
+                <label for="name" class="mb-2 block text-sm font-semibold text-slate-900">Full name</label>
+                <input id="name" type="text" name="name" value="{{ form_data.name }}" required class="block w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-slate-900 shadow-sm transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100" />
+              </div>
+
+              <div>
+                <label for="email" class="mb-2 block text-sm font-semibold text-slate-900">Email</label>
+                <input id="email" type="email" name="email" value="{{ form_data.email }}" required class="block w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-slate-900 shadow-sm transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100" />
+              </div>
+
+              <div>
+                <label for="gender" class="mb-2 block text-sm font-semibold text-slate-900">Gender</label>
+                <select id="gender" name="gender" class="block w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-slate-900 shadow-sm transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100">
+                  <option value="" {% if not form_data.gender %}selected{% endif %}>Prefer not to say</option>
+                  <option value="female" {% if form_data.gender == 'female' %}selected{% endif %}>Female</option>
+                  <option value="male" {% if form_data.gender == 'male' %}selected{% endif %}>Male</option>
+                  <option value="non-binary" {% if form_data.gender == 'non-binary' %}selected{% endif %}>Non-binary</option>
+                </select>
+              </div>
+
+              <div class="grid gap-5 sm:grid-cols-2">
+                <div>
+                  <label for="password" class="mb-2 block text-sm font-semibold text-slate-900">Password</label>
+                  <input id="password" type="password" name="password" required class="block w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-slate-900 shadow-sm transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100" />
+                </div>
+                <div>
+                  <label for="confirm_password" class="mb-2 block text-sm font-semibold text-slate-900">Confirm password</label>
+                  <input id="confirm_password" type="password" name="confirm_password" required class="block w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-slate-900 shadow-sm transition focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100" />
+                </div>
+              </div>
+
+              <button type="submit" class="inline-flex w-full items-center justify-center rounded-2xl bg-slate-950 px-5 py-4 text-sm font-semibold text-white transition duration-200 hover:-translate-y-0.5 hover:bg-slate-900 focus:outline-none focus:ring-4 focus:ring-slate-300">
+                Create account
+              </button>
+            </form>
+
+            <div class="mt-8 flex flex-col gap-3 border-t border-slate-200 pt-6 text-sm text-slate-600 sm:flex-row sm:items-center sm:justify-between">
+              <p>Already have an account?</p>
+              <a href="{{ url_for('login') }}" class="font-semibold text-emerald-700 transition hover:text-emerald-800">
+                Back to login
+              </a>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
   </main>
 {% endblock %}

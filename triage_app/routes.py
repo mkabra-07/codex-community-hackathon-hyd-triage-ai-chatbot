@@ -25,6 +25,7 @@ from .database import (
 from .history_summary import summarize_patient_history
 from .openai_service import create_openai_client
 from .session_store import append_message, get_session
+from .session_summaries import list_sessions_page, get_session_detail, maybe_refresh_session_summary
 from .chat_flow import build_initial_prompt, handle_chat
 
 
@@ -48,13 +49,13 @@ def register_routes(app: Flask) -> None:
             return redirect(url_for("chat_page"))
 
         if request.method == "POST":
-            name = request.form.get("name", "").strip()
+            identifier = request.form.get("email", "").strip()
             password = request.form.get("password", "")
-            user = authenticate_user(app.config["SQLITE_PATH"], name, password)
+            user = authenticate_user(app.config["SQLITE_PATH"], identifier, password)
 
             if not user:
-                flash("Invalid name or password.", "error")
-                return render_template("login.html", form_data={"name": name})
+                flash("Invalid email or password.", "error")
+                return render_template("login.html", form_data={"email": identifier})
 
             session.clear()
             session["user_id"] = user["id"]
@@ -69,6 +70,7 @@ def register_routes(app: Flask) -> None:
 
         form_data = {
             "name": request.form.get("name", ""),
+            "email": request.form.get("email", ""),
             "gender": request.form.get("gender", ""),
         }
 
@@ -76,8 +78,8 @@ def register_routes(app: Flask) -> None:
             password = request.form.get("password", "")
             confirm_password = request.form.get("confirm_password", "")
 
-            if not form_data["name"].strip() or not password:
-                flash("Name and password are required.", "error")
+            if not form_data["name"].strip() or not form_data["email"].strip() or not password:
+                flash("Name, email, and password are required.", "error")
                 return render_template("register.html", form_data=form_data)
 
             if password != confirm_password:
@@ -88,6 +90,7 @@ def register_routes(app: Flask) -> None:
                 user = create_user(
                     app.config["SQLITE_PATH"],
                     name=form_data["name"],
+                    email=form_data["email"],
                     password=password,
                     gender=form_data["gender"],
                 )
@@ -121,6 +124,14 @@ def register_routes(app: Flask) -> None:
             model=app.config["OPENAI_MODEL"],
             limit=50,
         )
+        initial_sessions_page = list_sessions_page(
+            db_path=app.config["SQLITE_PATH"],
+            user_id=user["id"],
+            client=openai_client,
+            model=app.config["OPENAI_MODEL"],
+            page=1,
+            per_page=15,
+        )
         return render_template(
             "chat.html",
             user=user,
@@ -128,6 +139,7 @@ def register_routes(app: Flask) -> None:
             profile=_profile_payload(user),
             initial_chat_state=build_initial_prompt(session_state, history_context),
             initial_history_context=history_context,
+            initial_sessions_page=initial_sessions_page,
         )
 
     @app.post("/profile")
@@ -189,6 +201,44 @@ def register_routes(app: Flask) -> None:
             }
         )
 
+    @app.get("/sessions")
+    @login_required
+    def sessions():
+        page = request.args.get("page", default=1, type=int)
+        per_page = request.args.get("per_page", default=15, type=int)
+        payload = list_sessions_page(
+            db_path=app.config["SQLITE_PATH"],
+            user_id=g.user["id"],
+            client=openai_client,
+            model=app.config["OPENAI_MODEL"],
+            page=page,
+            per_page=per_page,
+        )
+        return jsonify(
+            {
+                "sessions": payload["sessions"],
+                "page": payload["page"],
+                "perPage": payload["per_page"],
+                "total": payload["total"],
+                "totalPages": payload["total_pages"],
+                "hasMore": payload["has_more"],
+            }
+        )
+
+    @app.get("/sessions/<session_id>")
+    @login_required
+    def session_detail(session_id: str):
+        payload = get_session_detail(
+            db_path=app.config["SQLITE_PATH"],
+            user_id=g.user["id"],
+            session_id=session_id,
+            client=openai_client,
+            model=app.config["OPENAI_MODEL"],
+        )
+        if payload is None:
+            return jsonify({"error": "Session not found."}), 404
+        return jsonify(payload)
+
     @app.post("/chat")
     @login_required
     def chat():
@@ -206,6 +256,13 @@ def register_routes(app: Flask) -> None:
 
         append_message(session_key, "user", message)
         _persist_message(user["id"], session_id, "user", message)
+        maybe_refresh_session_summary(
+            db_path=app.config["SQLITE_PATH"],
+            user_id=user["id"],
+            session_id=session_id,
+            client=openai_client,
+            model=app.config["OPENAI_MODEL"],
+        )
         history_context = summarize_patient_history(
             user_id=user["id"],
             db_path=app.config["SQLITE_PATH"],
@@ -233,6 +290,14 @@ def register_routes(app: Flask) -> None:
                 response_payload["reply"],
                 response_payload["assessment"],
             )
+            maybe_refresh_session_summary(
+                db_path=app.config["SQLITE_PATH"],
+                user_id=user["id"],
+                session_id=session_id,
+                client=openai_client,
+                model=app.config["OPENAI_MODEL"],
+                force=response_payload.get("stage") == "TRIAGE_RESULT",
+            )
             return jsonify(_camelize_payload(response_payload))
         except Exception:
             fallback_reply = (
@@ -248,6 +313,14 @@ def register_routes(app: Flask) -> None:
             }
             append_message(session_key, "assistant", fallback_reply, {"stage": "TRIAGE_RESULT", "risk_level": "URGENT"})
             _persist_message(user["id"], session_id, "assistant", fallback_reply, fallback_assessment)
+            maybe_refresh_session_summary(
+                db_path=app.config["SQLITE_PATH"],
+                user_id=user["id"],
+                session_id=session_id,
+                client=openai_client,
+                model=app.config["OPENAI_MODEL"],
+                force=True,
+            )
             return (
                 jsonify(
                     {
