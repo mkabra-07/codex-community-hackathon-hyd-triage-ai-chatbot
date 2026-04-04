@@ -2,34 +2,210 @@
 
 {% block title %}Login | AI Healthcare Triage Chatbot{% endblock %}
 
+{% block extra_head %}
+  <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ["Sora", "ui-sans-serif", "system-ui", "sans-serif"]
+          },
+          colors: {
+            brand: {
+              50: "#effcf8",
+              100: "#d7f8ee",
+              500: "#12b981",
+              600: "#0f9f73",
+              700: "#0b7f5d",
+              950: "#052e2b"
+            }
+          },
+          boxShadow: {
+            soft: "0 30px 80px rgba(15, 23, 42, 0.14)"
+          }
+        }
+      }
+    };
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet" />
+{% endblock %}
+
 {% block body %}
-  <main class="auth-shell">
-    <section class="auth-card">
-      <p class="eyebrow">AI-Powered Triage</p>
-      <h1>Welcome back</h1>
-      <p class="auth-subtitle">Sign in to continue your healthcare triage chat with your saved profile.</p>
+  <main class="min-h-screen overflow-hidden bg-[linear-gradient(180deg,#f8fffd_0%,#eef7ff_44%,#f6f1ff_100%)]">
+    <div class="mx-auto flex min-h-screen w-full max-w-7xl items-center px-4 py-6 sm:px-6 lg:px-8">
+      <div class="grid w-full gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+        {% set cta_label = "Learn More" %}
+        {% set cta_href = "#features" %}
+        {% include "_auth_showcase.html" %}
 
-      {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-          {% for category, message in messages %}
-            <p class="flash-message flash-{{ category }}">{{ message }}</p>
-          {% endfor %}
-        {% endif %}
-      {% endwith %}
+        <section class="relative flex items-center">
+          <div class="absolute inset-x-8 top-0 hidden h-48 rounded-full bg-emerald-200/40 blur-3xl lg:block"></div>
+          <div class="relative w-full rounded-[32px] border border-slate-200/70 bg-white/90 p-6 shadow-soft backdrop-blur-xl sm:p-8 lg:p-10">
+            <div class="flex items-center justify-between gap-4">
+              <div>
+                <p class="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">Member login</p>
+                <h2 class="mt-3 text-3xl font-semibold tracking-tight text-slate-950">Welcome back</h2>
+                <p class="mt-3 max-w-md text-sm leading-7 text-slate-600">
+                  Sign in to continue a triage conversation, review patient context, and keep follow-ups organized in one place.
+                </p>
+              </div>
+              <span class="hidden rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-semibold text-emerald-700 sm:inline-flex">
+                Secure access
+              </span>
+            </div>
 
-      <form method="post" class="auth-form">
-        <label>
-          Full name
-          <input type="text" name="name" value="{{ form_data.name }}" required />
-        </label>
-        <label>
-          Password
-          <input type="password" name="password" required />
-        </label>
-        <button type="submit">Login</button>
-      </form>
+            {% with messages = get_flashed_messages(with_categories=true) %}
+              {% if messages %}
+                <div class="mt-6 space-y-3" aria-live="polite">
+                  {% for category, message in messages %}
+                    <p class="rounded-2xl border px-4 py-3 text-sm font-medium {% if category == 'error' %}border-rose-200 bg-rose-50 text-rose-700{% else %}border-sky-200 bg-sky-50 text-sky-700{% endif %}">
+                      {{ message }}
+                    </p>
+                  {% endfor %}
+                </div>
+              {% endif %}
+            {% endwith %}
 
-      <p class="auth-link">New here? <a href="{{ url_for('register') }}">Create an account</a></p>
-    </section>
+            <form method="post" id="loginForm" class="mt-8 space-y-5" novalidate>
+              <div>
+                <label for="email" class="mb-2 block text-sm font-semibold text-slate-900">Email</label>
+                <input
+                  id="email"
+                  name="email"
+                  type="email"
+                  value="{{ form_data.email }}"
+                  placeholder="you@company.com"
+                  autocomplete="email"
+                  required
+                  class="block w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-slate-900 shadow-sm transition placeholder:text-slate-400 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                />
+                <p id="emailError" class="mt-2 hidden text-sm font-medium text-rose-600"></p>
+              </div>
+
+              <div>
+                <div class="mb-2 flex items-center justify-between gap-4">
+                  <label for="password" class="block text-sm font-semibold text-slate-900">Password</label>
+                  <a href="mailto:support@careflow.app?subject=CareFlow%20password%20reset" class="text-sm font-medium text-emerald-700 transition hover:text-emerald-800">
+                    Forgot password?
+                  </a>
+                </div>
+                <input
+                  id="password"
+                  name="password"
+                  type="password"
+                  placeholder="Enter your password"
+                  autocomplete="current-password"
+                  required
+                  minlength="6"
+                  class="block w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-slate-900 shadow-sm transition placeholder:text-slate-400 focus:border-emerald-500 focus:ring-4 focus:ring-emerald-100"
+                />
+                <p id="passwordError" class="mt-2 hidden text-sm font-medium text-rose-600"></p>
+              </div>
+
+              <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                <p class="text-sm font-semibold text-slate-800">Demo account</p>
+                <p class="mt-1 text-sm leading-6 text-slate-600">
+                  Try <span class="font-semibold text-slate-900">aarav.sharma@careflow.app</span> with password <span class="font-semibold text-slate-900">aarav123</span>.
+                </p>
+              </div>
+
+              <button
+                type="submit"
+                id="loginButton"
+                class="inline-flex w-full items-center justify-center gap-3 rounded-2xl bg-slate-950 px-5 py-4 text-sm font-semibold text-white transition duration-200 hover:-translate-y-0.5 hover:bg-slate-900 focus:outline-none focus:ring-4 focus:ring-slate-300 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                <svg id="loginSpinner" class="hidden h-5 w-5 animate-spin text-white" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3" class="opacity-30"></circle>
+                  <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"></path>
+                </svg>
+                <span id="loginButtonLabel">Log in</span>
+              </button>
+            </form>
+
+            <div class="mt-8 flex flex-col gap-3 border-t border-slate-200 pt-6 text-sm text-slate-600 sm:flex-row sm:items-center sm:justify-between">
+              <p>New to CareFlow?</p>
+              <a href="{{ url_for('register') }}" class="font-semibold text-emerald-700 transition hover:text-emerald-800">
+                Sign up and create an account
+              </a>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
   </main>
+{% endblock %}
+
+{% block extra_scripts %}
+  <script>
+    const loginForm = document.getElementById("loginForm");
+    const emailInput = document.getElementById("email");
+    const passwordInput = document.getElementById("password");
+    const emailError = document.getElementById("emailError");
+    const passwordError = document.getElementById("passwordError");
+    const loginButton = document.getElementById("loginButton");
+    const loginButtonLabel = document.getElementById("loginButtonLabel");
+    const loginSpinner = document.getElementById("loginSpinner");
+
+    function showFieldError(element, errorElement, message) {
+      errorElement.textContent = message;
+      errorElement.classList.remove("hidden");
+      element.classList.add("border-rose-300", "bg-rose-50/60");
+      element.setAttribute("aria-invalid", "true");
+    }
+
+    function clearFieldError(element, errorElement) {
+      errorElement.textContent = "";
+      errorElement.classList.add("hidden");
+      element.classList.remove("border-rose-300", "bg-rose-50/60");
+      element.removeAttribute("aria-invalid");
+    }
+
+    function validateLoginForm() {
+      let isValid = true;
+      clearFieldError(emailInput, emailError);
+      clearFieldError(passwordInput, passwordError);
+
+      if (!emailInput.value.trim()) {
+        showFieldError(emailInput, emailError, "Email is required.");
+        isValid = false;
+      } else if (!emailInput.checkValidity()) {
+        showFieldError(emailInput, emailError, "Enter a valid email address.");
+        isValid = false;
+      }
+
+      if (!passwordInput.value.trim()) {
+        showFieldError(passwordInput, passwordError, "Password is required.");
+        isValid = false;
+      } else if (passwordInput.value.trim().length < 6) {
+        showFieldError(passwordInput, passwordError, "Password must be at least 6 characters.");
+        isValid = false;
+      }
+
+      return isValid;
+    }
+
+    [emailInput, passwordInput].forEach((input) => {
+      input.addEventListener("input", () => {
+        if (input === emailInput) {
+          clearFieldError(emailInput, emailError);
+        } else {
+          clearFieldError(passwordInput, passwordError);
+        }
+      });
+    });
+
+    loginForm.addEventListener("submit", (event) => {
+      if (!validateLoginForm()) {
+        event.preventDefault();
+        return;
+      }
+
+      loginButton.disabled = true;
+      loginSpinner.classList.remove("hidden");
+      loginButtonLabel.textContent = "Signing in...";
+    });
+  </script>
 {% endblock %}

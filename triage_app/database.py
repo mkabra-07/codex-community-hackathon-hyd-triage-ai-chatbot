@@ -1,6 +1,7 @@
 import json
 import os
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -9,6 +10,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 SAMPLE_USERS = [
     {
         "name": "Aarav Sharma",
+        "email": "aarav.sharma@careflow.app",
         "password": "aarav123",
         "age": 31,
         "gender": "male",
@@ -18,6 +20,7 @@ SAMPLE_USERS = [
     },
     {
         "name": "Sara Khan",
+        "email": "sara.khan@careflow.app",
         "password": "sara123",
         "age": 27,
         "gender": "female",
@@ -27,6 +30,7 @@ SAMPLE_USERS = [
     },
     {
         "name": "Neha Patel",
+        "email": "neha.patel@careflow.app",
         "password": "neha123",
         "age": None,
         "gender": "female",
@@ -36,6 +40,7 @@ SAMPLE_USERS = [
     },
     {
         "name": "Rohan Mehta",
+        "email": "rohan.mehta@careflow.app",
         "password": "rohan123",
         "age": 45,
         "gender": "male",
@@ -54,6 +59,7 @@ def initialize_database(db_path: str) -> None:
             CREATE TABLE IF NOT EXISTS users (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
+                email TEXT UNIQUE,
                 password_hash TEXT NOT NULL,
                 age INTEGER,
                 gender TEXT,
@@ -89,9 +95,52 @@ def initialize_database(db_path: str) -> None:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS session_summaries (
+                user_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                created_at DATETIME NOT NULL,
+                last_message_id INTEGER NOT NULL DEFAULT 0,
+                message_count INTEGER NOT NULL DEFAULT 0,
+                summary TEXT NOT NULL,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, session_id),
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                session_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                last_activity_timestamp DATETIME NOT NULL,
+                created_at DATETIME NOT NULL,
+                ended_at DATETIME,
+                end_reason TEXT,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_conversations_user_session_id
+            ON conversations (user_id, session_id, id)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id
+            ON user_sessions (user_id, is_active)
+            """
+        )
+        _ensure_user_email_column(connection)
         connection.commit()
 
     seed_users(db_path)
+    backfill_user_emails(db_path)
 
 
 def seed_users(db_path: str) -> None:
@@ -105,12 +154,13 @@ def seed_users(db_path: str) -> None:
         for user in SAMPLE_USERS:
             connection.execute(
                 """
-                INSERT INTO users (id, name, password_hash, age, gender, height, weight, existing_conditions)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO users (id, name, email, password_hash, age, gender, height, weight, existing_conditions)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     _slugify(user["name"]),
                     user["name"],
+                    user["email"],
                     generate_password_hash(user["password"]),
                     user["age"],
                     user["gender"],
@@ -126,6 +176,7 @@ def create_user(
     db_path: str,
     *,
     name: str,
+    email: str,
     password: str,
     gender: str = "",
     age: Optional[int] = None,
@@ -138,12 +189,13 @@ def create_user(
         try:
             connection.execute(
                 """
-                INSERT INTO users (id, name, password_hash, age, gender, height, weight, existing_conditions)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO users (id, name, email, password_hash, age, gender, height, weight, existing_conditions)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_id,
                     name.strip(),
+                    email.strip().lower(),
                     generate_password_hash(password),
                     age,
                     gender.strip() or None,
@@ -154,13 +206,13 @@ def create_user(
             )
             connection.commit()
         except sqlite3.IntegrityError as error:
-            raise ValueError("A user with that name already exists.") from error
+            raise ValueError("A user with that name or email already exists.") from error
 
     return get_user_by_id(db_path, user_id)
 
 
-def authenticate_user(db_path: str, name: str, password: str) -> Optional[Dict[str, Any]]:
-    user = get_user_by_name(db_path, name)
+def authenticate_user(db_path: str, identifier: str, password: str) -> Optional[Dict[str, Any]]:
+    user = get_user_by_email(db_path, identifier) or get_user_by_name(db_path, identifier)
     if not user:
         return None
     if not check_password_hash(user["password_hash"], password):
@@ -179,6 +231,16 @@ def get_user_by_name(db_path: str, name: str) -> Optional[Dict[str, Any]]:
     with sqlite3.connect(db_path) as connection:
         connection.row_factory = sqlite3.Row
         row = connection.execute("SELECT * FROM users WHERE lower(name) = lower(?)", (name.strip(),)).fetchone()
+        return _row_to_user(row)
+
+
+def get_user_by_email(db_path: str, email: str) -> Optional[Dict[str, Any]]:
+    normalized_email = email.strip().lower()
+    if not normalized_email:
+        return None
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute("SELECT * FROM users WHERE lower(email) = lower(?)", (normalized_email,)).fetchone()
         return _row_to_user(row)
 
 
@@ -244,6 +306,118 @@ def persist_message(
         connection.commit()
 
 
+def create_user_session(db_path: str, *, session_id: str, user_id: str) -> Dict[str, Any]:
+    now = _utc_now_sql()
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO user_sessions (
+                session_id,
+                user_id,
+                is_active,
+                last_activity_timestamp,
+                created_at,
+                ended_at,
+                end_reason
+            )
+            VALUES (?, ?, 1, ?, ?, NULL, NULL)
+            ON CONFLICT(session_id) DO UPDATE SET
+                user_id = excluded.user_id,
+                is_active = 1,
+                last_activity_timestamp = excluded.last_activity_timestamp,
+                created_at = excluded.created_at,
+                ended_at = NULL,
+                end_reason = NULL
+            """,
+            (session_id, user_id, now, now),
+        )
+        connection.commit()
+    return get_user_session(db_path, session_id)
+
+
+def get_user_session(db_path: str, session_id: str) -> Optional[Dict[str, Any]]:
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            """
+            SELECT
+                session_id,
+                user_id,
+                is_active,
+                last_activity_timestamp,
+                created_at,
+                ended_at,
+                end_reason
+            FROM user_sessions
+            WHERE session_id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    payload = dict(row)
+    payload["is_active"] = bool(payload["is_active"])
+    return payload
+
+
+def touch_user_session(db_path: str, session_id: str) -> Optional[Dict[str, Any]]:
+    now = _utc_now_sql()
+    with sqlite3.connect(db_path) as connection:
+        cursor = connection.execute(
+            """
+            UPDATE user_sessions
+            SET last_activity_timestamp = ?
+            WHERE session_id = ? AND is_active = 1
+            """,
+            (now, session_id),
+        )
+        connection.commit()
+    if cursor.rowcount == 0:
+        return None
+    return get_user_session(db_path, session_id)
+
+
+def end_user_session(db_path: str, session_id: str, *, reason: str = "manual") -> Optional[Dict[str, Any]]:
+    now = _utc_now_sql()
+    with sqlite3.connect(db_path) as connection:
+        cursor = connection.execute(
+            """
+            UPDATE user_sessions
+            SET
+                is_active = 0,
+                ended_at = COALESCE(ended_at, ?),
+                end_reason = COALESCE(end_reason, ?)
+            WHERE session_id = ?
+            """,
+            (now, reason, session_id),
+        )
+        connection.commit()
+    if cursor.rowcount == 0:
+        return None
+    return get_user_session(db_path, session_id)
+
+
+def expire_user_session_if_idle(
+    db_path: str,
+    session_id: str,
+    *,
+    max_idle_seconds: int,
+    reason: str = "idle_timeout",
+) -> Optional[Dict[str, Any]]:
+    record = get_user_session(db_path, session_id)
+    if record is None or not record["is_active"]:
+        return record
+
+    last_activity = _parse_sqlite_timestamp(record["last_activity_timestamp"])
+    if last_activity is None:
+        return end_user_session(db_path, session_id, reason=reason)
+
+    idle_for = datetime.now(timezone.utc) - last_activity
+    if idle_for >= timedelta(seconds=max_idle_seconds):
+        return end_user_session(db_path, session_id, reason=reason)
+    return record
+
+
 def fetch_recent_conversations(db_path: str, user_id: str, limit: int = 30) -> List[Dict[str, Any]]:
     with sqlite3.connect(db_path) as connection:
         connection.row_factory = sqlite3.Row
@@ -262,6 +436,121 @@ def fetch_recent_conversations(db_path: str, user_id: str, limit: int = 30) -> L
     for item in conversations:
         item["metadata"] = json.loads(item["metadata"]) if item.get("metadata") else None
     return conversations
+
+
+def fetch_session_messages(db_path: str, user_id: str, session_id: str) -> List[Dict[str, Any]]:
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT id, session_id, role, message, metadata, created_at
+            FROM conversations
+            WHERE user_id = ? AND session_id = ?
+            ORDER BY id ASC
+            """,
+            (user_id, session_id),
+        ).fetchall()
+
+    messages = [dict(row) for row in rows]
+    for item in messages:
+        item["metadata"] = json.loads(item["metadata"]) if item.get("metadata") else None
+    return messages
+
+
+def fetch_session_overview(
+    db_path: str,
+    user_id: str,
+    *,
+    limit: int = 20,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            WITH session_stats AS (
+                SELECT
+                    session_id,
+                    MIN(created_at) AS created_at,
+                    MAX(created_at) AS updated_at,
+                    COUNT(*) AS message_count,
+                    MAX(id) AS last_message_id
+                FROM conversations
+                WHERE user_id = ?
+                GROUP BY session_id
+            )
+            SELECT
+                session_stats.session_id,
+                session_stats.created_at,
+                session_stats.updated_at,
+                session_stats.message_count,
+                session_stats.last_message_id,
+                session_summaries.summary AS cached_summary,
+                session_summaries.last_message_id AS summary_last_message_id
+            FROM session_stats
+            LEFT JOIN session_summaries
+                ON session_summaries.user_id = ?
+                AND session_summaries.session_id = session_stats.session_id
+            ORDER BY session_stats.last_message_id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (user_id, user_id, limit, offset),
+        ).fetchall()
+
+    return [dict(row) for row in rows]
+
+
+def fetch_session_record(db_path: str, user_id: str, session_id: str) -> Optional[Dict[str, Any]]:
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            """
+            WITH session_stats AS (
+                SELECT
+                    session_id,
+                    MIN(created_at) AS created_at,
+                    MAX(created_at) AS updated_at,
+                    COUNT(*) AS message_count,
+                    MAX(id) AS last_message_id
+                FROM conversations
+                WHERE user_id = ? AND session_id = ?
+                GROUP BY session_id
+            )
+            SELECT
+                session_stats.session_id,
+                session_stats.created_at,
+                session_stats.updated_at,
+                session_stats.message_count,
+                session_stats.last_message_id,
+                session_summaries.summary AS cached_summary,
+                session_summaries.last_message_id AS summary_last_message_id
+            FROM session_stats
+            LEFT JOIN session_summaries
+                ON session_summaries.user_id = ?
+                AND session_summaries.session_id = session_stats.session_id
+            """,
+            (user_id, session_id, user_id),
+        ).fetchone()
+
+    return dict(row) if row else None
+
+
+def count_sessions(db_path: str, user_id: str) -> int:
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            """
+            SELECT COUNT(*) AS session_count
+            FROM (
+                SELECT session_id
+                FROM conversations
+                WHERE user_id = ?
+                GROUP BY session_id
+            )
+            """,
+            (user_id,),
+        ).fetchone()
+    return int(row["session_count"] or 0)
 
 
 def get_latest_conversation_id(db_path: str, user_id: str) -> int:
@@ -293,6 +582,24 @@ def get_cached_history_summary(db_path: str, user_id: str) -> Optional[Dict[str,
     }
 
 
+def get_cached_session_summary(db_path: str, user_id: str, session_id: str) -> Optional[Dict[str, Any]]:
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            """
+            SELECT user_id, session_id, created_at, last_message_id, message_count, summary, updated_at
+            FROM session_summaries
+            WHERE user_id = ? AND session_id = ?
+            """,
+            (user_id, session_id),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    return dict(row)
+
+
 def upsert_history_summary(db_path: str, user_id: str, last_message_id: int, summary: Dict[str, Any]) -> None:
     with sqlite3.connect(db_path) as connection:
         connection.execute(
@@ -305,6 +612,41 @@ def upsert_history_summary(db_path: str, user_id: str, last_message_id: int, sum
                 updated_at = CURRENT_TIMESTAMP
             """,
             (user_id, last_message_id, json.dumps(summary)),
+        )
+        connection.commit()
+
+
+def upsert_session_summary(
+    db_path: str,
+    *,
+    user_id: str,
+    session_id: str,
+    created_at: str,
+    last_message_id: int,
+    message_count: int,
+    summary: str,
+) -> None:
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO session_summaries (
+                user_id,
+                session_id,
+                created_at,
+                last_message_id,
+                message_count,
+                summary,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id, session_id) DO UPDATE SET
+                created_at = excluded.created_at,
+                last_message_id = excluded.last_message_id,
+                message_count = excluded.message_count,
+                summary = excluded.summary,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (user_id, session_id, created_at, last_message_id, message_count, summary),
         )
         connection.commit()
 
@@ -331,6 +673,31 @@ def _row_to_user(row) -> Optional[Dict[str, Any]]:
     return data
 
 
+def _ensure_user_email_column(connection: sqlite3.Connection) -> None:
+    columns = {
+        row[1]
+        for row in connection.execute("PRAGMA table_info(users)").fetchall()
+    }
+    if "email" not in columns:
+        connection.execute("ALTER TABLE users ADD COLUMN email TEXT")
+        connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email)")
+
+
+def backfill_user_emails(db_path: str) -> None:
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute("SELECT id, name, email FROM users").fetchall()
+        for row in rows:
+            if row["email"]:
+                continue
+            email = _default_email_for_name(row["name"])
+            connection.execute(
+                "UPDATE users SET email = ? WHERE id = ?",
+                (email, row["id"]),
+            )
+        connection.commit()
+
+
 def _slugify(name: str) -> str:
     return "-".join(name.lower().split())
 
@@ -343,3 +710,31 @@ def _unique_user_id(db_path: str, name: str) -> str:
         counter += 1
         candidate = f"{base}-{counter}"
     return candidate
+
+
+def _default_email_for_name(name: str) -> str:
+    local_part = ".".join(name.lower().split()) or "user"
+    return f"{local_part}@careflow.app"
+
+
+def _utc_now_sql() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _parse_sqlite_timestamp(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    if "T" in normalized:
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+    else:
+        try:
+            parsed = datetime.strptime(normalized, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
