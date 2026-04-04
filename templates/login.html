@@ -68,6 +68,7 @@
                 </div>
               {% endif %}
             {% endwith %}
+            <div id="sessionNotice" class="mt-6 hidden rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-medium text-sky-700" aria-live="polite"></div>
 
             <form method="post" id="loginForm" class="mt-8 space-y-5" novalidate>
               <div>
@@ -148,6 +149,21 @@
     const loginButton = document.getElementById("loginButton");
     const loginButtonLabel = document.getElementById("loginButtonLabel");
     const loginSpinner = document.getElementById("loginSpinner");
+    const sessionNotice = document.getElementById("sessionNotice");
+
+    try {
+      const rawNotice = window.localStorage.getItem("triage-session-notice");
+      if (rawNotice) {
+        const parsedNotice = JSON.parse(rawNotice);
+        if (parsedNotice && parsedNotice.message) {
+          sessionNotice.textContent = parsedNotice.message;
+          sessionNotice.classList.remove("hidden");
+        }
+        window.localStorage.removeItem("triage-session-notice");
+      }
+    } catch (_error) {
+      window.localStorage.removeItem("triage-session-notice");
+    }
 
     function showFieldError(element, errorElement, message) {
       errorElement.textContent = message;

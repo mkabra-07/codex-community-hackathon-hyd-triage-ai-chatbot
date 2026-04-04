@@ -26,15 +26,16 @@
           </div>
           <div class="header-actions">
             <div class="status-pill">Safety first</div>
-            <form method="post" action="{{ url_for('logout') }}">
-              <button type="submit" class="ghost-button">Logout</button>
-            </form>
+            <button type="button" id="endSessionButton" class="ghost-button">End Session</button>
+            <button type="button" id="logoutButton" class="ghost-button">Logout</button>
           </div>
         </header>
 
         <div class="disclaimer-banner">
           This is not medical advice. In an emergency, contact local emergency services immediately.
         </div>
+
+        <p id="sessionStatusBanner" class="session-status-banner" hidden></p>
 
         <section class="profile-summary">
           <div>
@@ -133,11 +134,50 @@
     </div>
   </main>
 
-  <script>
+  <div id="sessionWarningModal" class="session-modal-backdrop" hidden aria-hidden="true">
+    <div class="session-modal" role="dialog" aria-modal="true" aria-labelledby="sessionWarningTitle">
+      <h2 id="sessionWarningTitle">Are you still there?</h2>
+      <p>Your session will expire in <span data-session-warning-countdown>30</span> seconds.</p>
+      <div class="session-modal-actions">
+        <button type="button" class="ghost-button" data-session-warning-stay>Stay signed in</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="sessionConfirmModal" class="session-modal-backdrop" hidden aria-hidden="true">
+    <div class="session-modal" role="dialog" aria-modal="true" aria-labelledby="sessionConfirmTitle">
+      <h2 id="sessionConfirmTitle">Confirm session action</h2>
+      <p data-session-confirm-copy>Are you sure you want to end this session?</p>
+      <div class="session-modal-actions">
+        <button type="button" class="ghost-button" data-session-confirm-cancel>Cancel</button>
+        <button type="button" class="danger-button" data-session-confirm-approve>Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="historyPreviewModal" class="session-modal-backdrop" hidden aria-hidden="true">
+    <div class="session-modal session-modal-preview" role="dialog" aria-modal="true" aria-labelledby="historyPreviewTitle">
+      <div class="session-preview-header">
+        <div>
+          <p class="eyebrow">Previous Chat</p>
+          <h2 id="historyPreviewTitle">Session details</h2>
+          <p id="historyPreviewMeta" class="session-preview-meta"></p>
+        </div>
+        <button type="button" id="closeHistoryPreviewButton" class="ghost-button">Close</button>
+      </div>
+      <div id="historyPreviewBody" class="session-preview-body"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { createSessionLifecycle } from "{{ url_for('static', filename='sessionLifecycle.js') }}";
+
+    const currentUser = {{ profile|tojson }};
     const needsProfileCompletion = {{ 'true' if missing_fields else 'false' }};
     const initialChatState = {{ initial_chat_state|tojson }};
-    const initialHistoryContext = {{ initial_history_context|tojson }};
     const initialSessionsPage = {{ initial_sessions_page|tojson }};
+    const authSession = {{ auth_session|tojson }};
+    const sessionConfig = {{ session_config|tojson }};
     const initialMessage = {
       role: "assistant",
       text: needsProfileCompletion
@@ -160,6 +200,16 @@
     const debugTabEls = Array.from(document.querySelectorAll(".debug-tab"));
     const historyTimelineEl = document.getElementById("historyTimeline");
     const loadMoreSessionsButtonEl = document.getElementById("loadMoreSessionsButton");
+    const endSessionButtonEl = document.getElementById("endSessionButton");
+    const logoutButtonEl = document.getElementById("logoutButton");
+    const sessionStatusBannerEl = document.getElementById("sessionStatusBanner");
+    const sessionWarningModalEl = document.getElementById("sessionWarningModal");
+    const sessionConfirmModalEl = document.getElementById("sessionConfirmModal");
+    const historyPreviewModalEl = document.getElementById("historyPreviewModal");
+    const historyPreviewMetaEl = document.getElementById("historyPreviewMeta");
+    const historyPreviewBodyEl = document.getElementById("historyPreviewBody");
+    const historyPreviewTitleEl = document.getElementById("historyPreviewTitle");
+    const closeHistoryPreviewButtonEl = document.getElementById("closeHistoryPreviewButton");
     const speechSupported = Boolean(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
 
     let profileComplete = !needsProfileCompletion;
@@ -176,12 +226,27 @@
     let audioChunks = [];
     let voiceState = "idle";
     let isSending = false;
-    let sessionId = localStorage.getItem(`triage-session-id-{{ user.id }}`);
-
+    const chatSessionStorageKey = `triage-session-id-{{ user.id }}-${authSession.sessionId}`;
+    let sessionId = localStorage.getItem(chatSessionStorageKey);
     if (!sessionId) {
       sessionId = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : `session-${Date.now()}`;
-      localStorage.setItem(`triage-session-id-{{ user.id }}`, sessionId);
+      localStorage.setItem(chatSessionStorageKey, sessionId);
     }
+
+    const sessionManager = createSessionLifecycle({
+      userId: "{{ user.id }}",
+      session: authSession,
+      config: sessionConfig,
+      endpoints: {
+        activity: "{{ url_for('session_activity') }}",
+        end: "{{ url_for('end_session') }}",
+        login: "{{ url_for('login') }}"
+      },
+      chatSessionStorageKey,
+      warningModal: sessionWarningModalEl,
+      confirmModal: sessionConfirmModalEl,
+      statusBanner: sessionStatusBannerEl
+    });
 
     debugTabEls.forEach((button) => {
       button.addEventListener("click", () => {
@@ -196,6 +261,26 @@
         fetchSessionsPage(historyState.page + 1, { append: true });
       });
     }
+
+    endSessionButtonEl.addEventListener("click", () => {
+      sessionManager.confirmEndSession("manual_end");
+    });
+
+    logoutButtonEl.addEventListener("click", () => {
+      sessionManager.confirmEndSession("logout");
+    });
+
+    closeHistoryPreviewButtonEl.addEventListener("click", closeHistoryPreview);
+    historyPreviewModalEl.addEventListener("click", (event) => {
+      if (event.target === historyPreviewModalEl) {
+        closeHistoryPreview();
+      }
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !historyPreviewModalEl.hidden) {
+        closeHistoryPreview();
+      }
+    });
 
     if (!profileComplete) {
       inputEl.disabled = true;
@@ -270,7 +355,7 @@
         saveProfileButtonEl.disabled = true;
 
         try {
-          const response = await fetch("/profile", {
+          const { response, payload } = await sessionManager.fetchJson("/profile", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -282,7 +367,6 @@
             })
           });
 
-          const payload = await response.json();
           if (!response.ok) {
             throw new Error(payload.error || "Could not save profile.");
           }
@@ -304,6 +388,7 @@
       });
     }
 
+    sessionManager.start();
     boot();
 
     async function boot() {
@@ -314,10 +399,9 @@
 
       const existingSession = historyState.sessions.find((item) => item.session_id === sessionId);
       if (existingSession) {
-        await openSession(sessionId, { preserveActiveState: true });
+        await openCurrentSession(sessionId);
         return;
       }
-
       renderConversation([initialMessage]);
     }
 
@@ -436,13 +520,11 @@
       const typingNode = renderTyping();
 
       try {
-        const response = await fetch("/chat", {
+        const { response, payload } = await sessionManager.fetchJson("/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ sessionId, message })
         });
-
-        const payload = await response.json();
         if (!response.ok) {
           throw new Error(payload.error || "Something went wrong.");
         }
@@ -466,12 +548,10 @@
         formData.append("sessionId", sessionId);
         formData.append("audio", audioBlob, "voice-input.webm");
 
-        const response = await fetch("/voice", {
+        const { response, payload } = await sessionManager.fetchJson("/voice", {
           method: "POST",
           body: formData
         });
-
-        const payload = await response.json();
         if (!response.ok) {
           throw new Error(payload.error || "Voice input failed.");
         }
@@ -554,13 +634,12 @@
           page: String(page),
           per_page: String(historyState.perPage || 15)
         });
-        const response = await fetch(`/sessions?${query.toString()}`);
+        const { response, payload } = await sessionManager.fetchJson(`/sessions?${query.toString()}`);
         if (!response.ok) {
           historyState.loading = false;
           return;
         }
 
-        const payload = await response.json();
         const incomingSessions = Array.isArray(payload.sessions) ? payload.sessions : [];
         historyState = {
           sessions: append ? dedupeSessions(historyState.sessions.concat(incomingSessions)) : incomingSessions,
@@ -580,17 +659,12 @@
       }
     }
 
-    async function openSession(nextSessionId, { preserveActiveState = false } = {}) {
+    async function openCurrentSession(nextSessionId) {
       try {
-        const response = await fetch(`/sessions/${encodeURIComponent(nextSessionId)}`);
+        const { response, payload } = await sessionManager.fetchJson(`/sessions/${encodeURIComponent(nextSessionId)}`);
         if (!response.ok) {
           throw new Error("Unable to load that chat session.");
         }
-
-        const payload = await response.json();
-        sessionId = payload.session_id;
-        localStorage.setItem(`triage-session-id-{{ user.id }}`, sessionId);
-        renderSessionList(historyState.sessions);
 
         const messages = (payload.messages || []).map((message) => ({
           role: message.role,
@@ -599,19 +673,60 @@
           stage: message.metadata && message.metadata.stage ? message.metadata.stage : null
         }));
 
-        if (!messages.length) {
-          renderConversation([{ role: "assistant", text: "New Chat" }]);
-        } else {
-          renderConversation(messages);
-        }
+        renderConversation(messages.length ? messages : [initialMessage]);
+        errorEl.hidden = true;
+      } catch (error) {
+        showError(error.message || "Unable to load that chat session.");
+        renderConversation([initialMessage]);
+      }
+    }
 
-        if (!preserveActiveState) {
-          errorEl.hidden = true;
+    async function openSessionPreview(nextSessionId) {
+      try {
+        const { response, payload } = await sessionManager.fetchJson(`/sessions/${encodeURIComponent(nextSessionId)}`);
+        if (!response.ok) {
+          throw new Error("Unable to load that chat session.");
         }
+        renderHistoryPreview(payload);
+        errorEl.hidden = true;
       } catch (error) {
         errorEl.hidden = false;
         errorEl.textContent = error.message || "Unable to load that chat session.";
       }
+    }
+
+    function renderHistoryPreview(session) {
+      historyPreviewTitleEl.textContent = session.summary || "New Chat";
+      historyPreviewMetaEl.textContent = formatSessionMeta(session);
+      historyPreviewBodyEl.innerHTML = "";
+
+      const messages = Array.isArray(session.messages) ? session.messages : [];
+      if (!messages.length) {
+        const emptyState = document.createElement("p");
+        emptyState.className = "history-empty";
+        emptyState.textContent = "No messages were saved for this chat.";
+        historyPreviewBodyEl.appendChild(emptyState);
+      } else {
+        messages.forEach((message) => {
+          const item = document.createElement("article");
+          item.className = `session-preview-message ${message.role === "user" ? "session-preview-message-user" : ""}`;
+          item.innerHTML = `
+            <p class="session-preview-message-meta">${escapeHtml(message.role)} • ${formatDate(message.created_at)}</p>
+            <p class="session-preview-message-text">${escapeHtml(message.message)}</p>
+          `;
+          historyPreviewBodyEl.appendChild(item);
+        });
+      }
+
+      historyPreviewModalEl.hidden = false;
+      historyPreviewModalEl.setAttribute("aria-hidden", "false");
+      document.body.classList.add("modal-open");
+    }
+
+    function closeHistoryPreview() {
+      historyPreviewModalEl.hidden = true;
+      historyPreviewModalEl.setAttribute("aria-hidden", "true");
+      document.body.classList.remove("modal-open");
     }
 
     function renderSessionList(sessions) {
@@ -642,8 +757,8 @@
         group.sessions.forEach((session) => {
           const button = document.createElement("button");
           button.type = "button";
-          button.className = `history-session-card${session.session_id === sessionId ? " active" : ""}`;
-          button.setAttribute("aria-pressed", session.session_id === sessionId ? "true" : "false");
+          button.className = "history-session-card";
+          button.setAttribute("aria-pressed", "false");
           button.innerHTML = `
             <span class="history-session-icon" aria-hidden="true">AI</span>
             <span class="history-session-content">
@@ -651,7 +766,7 @@
               <span class="history-session-meta">${formatSessionMeta(session)}</span>
             </span>
           `;
-          button.addEventListener("click", () => openSession(session.session_id));
+          button.addEventListener("click", () => openSessionPreview(session.session_id));
           section.appendChild(button);
         });
 

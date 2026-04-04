@@ -1,5 +1,6 @@
 from functools import wraps
 from typing import Dict, List
+from uuid import uuid4
 
 from flask import (
     Flask,
@@ -17,10 +18,15 @@ from flask import (
 from .chat_flow import build_initial_prompt, handle_chat
 from .database import (
     authenticate_user,
+    create_user_session,
     create_user,
+    end_user_session,
+    expire_user_session_if_idle,
     get_user_by_id,
+    get_user_session,
     missing_profile_fields,
     persist_message,
+    touch_user_session,
     update_user_profile,
 )
 from .history_summary import summarize_patient_history
@@ -36,7 +42,47 @@ def register_routes(app: Flask) -> None:
     @app.before_request
     def load_current_user():
         user_id = session.get("user_id")
+        auth_session_id = session.get("auth_session_id")
         g.user = get_user_by_id(app.config["SQLITE_PATH"], user_id) if user_id else None
+        g.session_record = None
+
+        if g.user and not auth_session_id:
+            auth_session_id = str(uuid4())
+            create_user_session(
+                app.config["SQLITE_PATH"],
+                session_id=auth_session_id,
+                user_id=g.user["id"],
+            )
+            session["auth_session_id"] = auth_session_id
+            g.session_record = get_user_session(app.config["SQLITE_PATH"], auth_session_id)
+            return None
+
+        if not user_id or not auth_session_id:
+            return None
+
+        max_idle_seconds = app.config["SESSION_IDLE_SECONDS"] + app.config["SESSION_WARNING_SECONDS"]
+        session_record = expire_user_session_if_idle(
+            app.config["SQLITE_PATH"],
+            auth_session_id,
+            max_idle_seconds=max_idle_seconds,
+        )
+
+        if (
+            g.user is None
+            or session_record is None
+            or not session_record["is_active"]
+            or session_record["user_id"] != user_id
+        ):
+            reason = session_record.get("end_reason") if session_record else "session_ended"
+            if _is_public_endpoint():
+                session.clear()
+                if reason != "unauthenticated":
+                    flash(_session_message_for_reason(reason), "info")
+                return None
+            return _handle_inactive_session(reason)
+
+        g.session_record = session_record
+        return None
 
     @app.get("/")
     def root():
@@ -58,8 +104,7 @@ def register_routes(app: Flask) -> None:
                 flash("Invalid email or password.", "error")
                 return render_template("login.html", form_data={"email": identifier})
 
-            session.clear()
-            session["user_id"] = user["id"]
+            _start_authenticated_session(user["id"])
             return redirect(url_for("chat_page"))
 
         return render_template("login.html", form_data={})
@@ -99,8 +144,7 @@ def register_routes(app: Flask) -> None:
                 flash(str(error), "error")
                 return render_template("register.html", form_data=form_data)
 
-            session.clear()
-            session["user_id"] = user["id"]
+            _start_authenticated_session(user["id"])
             return redirect(url_for("chat_page"))
 
         return render_template("register.html", form_data=form_data)
@@ -108,8 +152,79 @@ def register_routes(app: Flask) -> None:
     @app.post("/logout")
     @login_required
     def logout():
+        auth_session_id = session.get("auth_session_id")
+        if auth_session_id:
+            end_user_session(app.config["SQLITE_PATH"], auth_session_id, reason="logout")
         session.clear()
+        flash("You have been logged out.", "info")
         return redirect(url_for("login"))
+
+    @app.post("/session/end")
+    @login_required
+    def end_session():
+        payload = request.get_json(silent=True) or {}
+        reason = (payload.get("reason") or "manual_end").strip() or "manual_end"
+        auth_session_id = session.get("auth_session_id")
+
+        if auth_session_id:
+            end_user_session(app.config["SQLITE_PATH"], auth_session_id, reason=reason)
+
+        session.clear()
+        return jsonify(
+            {
+                "ok": True,
+                "reason": reason,
+                "redirectUrl": url_for("login"),
+                "message": _session_message_for_reason(reason),
+            }
+        )
+
+    @app.post("/session/activity")
+    @login_required
+    def session_activity():
+        auth_session_id = session.get("auth_session_id")
+        if not auth_session_id:
+            return _json_session_ended("session_ended")
+
+        session_record = expire_user_session_if_idle(
+            app.config["SQLITE_PATH"],
+            auth_session_id,
+            max_idle_seconds=app.config["SESSION_IDLE_SECONDS"] + app.config["SESSION_WARNING_SECONDS"],
+        )
+        if session_record is None or not session_record["is_active"]:
+            return _json_session_ended((session_record or {}).get("end_reason", "session_ended"))
+
+        updated = touch_user_session(app.config["SQLITE_PATH"], auth_session_id)
+        if updated is None:
+            return _json_session_ended("session_ended")
+
+        g.session_record = updated
+        return jsonify(
+            {
+                "ok": True,
+                "session": _serialize_session_record(updated),
+            }
+        )
+
+    @app.get("/session/status")
+    @login_required
+    def session_status():
+        auth_session_id = session.get("auth_session_id")
+        if not auth_session_id:
+            return _json_session_ended("session_ended")
+
+        session_record = get_user_session(app.config["SQLITE_PATH"], auth_session_id)
+        if session_record is None or not session_record["is_active"]:
+            return _json_session_ended((session_record or {}).get("end_reason", "session_ended"))
+
+        return jsonify(
+            {
+                "ok": True,
+                "session": _serialize_session_record(session_record),
+                "idleTimeoutSeconds": app.config["SESSION_IDLE_SECONDS"],
+                "warningTimeoutSeconds": app.config["SESSION_WARNING_SECONDS"],
+            }
+        )
 
     @app.get("/chat")
     @login_required
@@ -138,6 +253,11 @@ def register_routes(app: Flask) -> None:
             user=user,
             missing_fields=missing_profile_fields(user),
             profile=_profile_payload(user),
+            auth_session=_serialize_session_record(g.session_record),
+            session_config={
+                "idleTimeoutSeconds": app.config["SESSION_IDLE_SECONDS"],
+                "warningTimeoutSeconds": app.config["SESSION_WARNING_SECONDS"],
+            },
             initial_chat_state=build_initial_prompt(session_state, history_context),
             initial_history_context=history_context,
             initial_sessions_page=initial_sessions_page,
@@ -289,6 +409,8 @@ def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
         if g.user is None:
+            if _wants_json_response():
+                return _json_session_ended("unauthenticated", status_code=401)
             return redirect(url_for("login"))
         return view(*args, **kwargs)
 
@@ -368,8 +490,95 @@ def _sync_session_profile_to_user(user_id: str, profile: Dict[str, object]) -> N
     )
 
 
+def _start_authenticated_session(user_id: str) -> Dict[str, object]:
+    session.clear()
+    auth_session_id = str(uuid4())
+    create_user_session(current_app.config["SQLITE_PATH"], session_id=auth_session_id, user_id=user_id)
+    session["user_id"] = user_id
+    session["auth_session_id"] = auth_session_id
+    return {"user_id": user_id, "auth_session_id": auth_session_id}
+
+
+def _refresh_authenticated_session() -> None:
+    auth_session_id = session.get("auth_session_id")
+    if not auth_session_id:
+        return
+    updated = touch_user_session(current_app.config["SQLITE_PATH"], auth_session_id)
+    if updated is not None:
+        g.session_record = updated
+
+
+def _handle_inactive_session(reason: str):
+    session.clear()
+    message = _session_message_for_reason(reason)
+    if _wants_json_response():
+        return _json_session_ended(reason)
+    if message:
+        flash(message, "info")
+    return redirect(url_for("login"))
+
+
+def _json_session_ended(reason: str, status_code: int = 440):
+    return (
+        jsonify(
+            {
+                "error": _session_message_for_reason(reason),
+                "reason": reason,
+                "sessionEnded": True,
+                "redirectUrl": url_for("login"),
+            }
+        ),
+        status_code,
+    )
+
+
+def _session_message_for_reason(reason: str) -> str:
+    messages = {
+        "logout": "You have been logged out.",
+        "manual_end": "Your session has been ended.",
+        "idle_timeout": "Session expired due to inactivity.",
+        "unauthenticated": "Please sign in to continue.",
+        "session_ended": "Your session is no longer active.",
+    }
+    return messages.get(reason, "Your session is no longer active.")
+
+
+def _serialize_session_record(record: Dict[str, object] | None) -> Dict[str, object] | None:
+    if record is None:
+        return None
+    return {
+        "sessionId": record["session_id"],
+        "userId": record["user_id"],
+        "isActive": bool(record["is_active"]),
+        "lastActivityTimestamp": record["last_activity_timestamp"],
+        "createdAt": record["created_at"],
+        "endedAt": record["ended_at"],
+        "endReason": record.get("end_reason"),
+    }
+
+
+def _wants_json_response() -> bool:
+    if request.endpoint in {
+        "chat",
+        "update_profile_route",
+        "history",
+        "sessions",
+        "session_detail",
+        "end_session",
+        "session_activity",
+        "session_status",
+    }:
+        return True
+    return request.accept_mimetypes.best == "application/json"
+
+
+def _is_public_endpoint() -> bool:
+    return request.endpoint in {"root", "login", "register", "health", "static"}
+
+
 def _process_chat_message(session_id: str, message: str):
     user = g.user
+    _refresh_authenticated_session()
     session_key = f"{user['id']}:{session_id}"
     session_profile = _profile_payload(user)
     session_state = get_session(session_key, base_profile=session_profile)
