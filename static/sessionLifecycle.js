@@ -10,6 +10,7 @@ export function createSessionLifecycle({
   confirmModal,
   statusBanner,
 }) {
+  const networkErrorMessages = new Set(["Failed to fetch", "Load failed"]);
   const idleTimeoutMs = Number(config.idleTimeoutSeconds || 60) * 1000;
   const warningTimeoutMs = Number(config.warningTimeoutSeconds || 30) * 1000;
   const storagePrefix = `triage-session-${userId}`;
@@ -176,6 +177,36 @@ export function createSessionLifecycle({
     }
   }
 
+  function isTransientFetchError(error) {
+    if (!(error instanceof TypeError)) {
+      return false;
+    }
+    return networkErrorMessages.has(error.message);
+  }
+
+  function wait(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+
+  async function fetchWithRetry(url, options = {}) {
+    try {
+      return await window.fetch(url, {
+        credentials: "same-origin",
+        ...options,
+      });
+    } catch (error) {
+      if (!isTransientFetchError(error)) {
+        throw error;
+      }
+
+      await wait(250);
+      return window.fetch(url, {
+        credentials: "same-origin",
+        ...options,
+      });
+    }
+  }
+
   async function terminateSession(reason, options = {}) {
     if (endingPromise) {
       return endingPromise;
@@ -308,10 +339,15 @@ export function createSessionLifecycle({
       showModal(confirmModal);
     },
     async fetchJson(url, options = {}) {
-      const response = await window.fetch(url, {
-        credentials: "same-origin",
-        ...options,
-      });
+      let response;
+      try {
+        response = await fetchWithRetry(url, options);
+      } catch (error) {
+        if (isTransientFetchError(error)) {
+          throw new Error("We couldn't reach the triage service. Please try once more.");
+        }
+        throw error;
+      }
       const payload = await safeJson(response);
       if (response.status === 401 || response.status === 440 || payload?.sessionEnded) {
         handleRemoteSessionEnd(payload?.reason || "session_ended", payload?.error);
