@@ -96,6 +96,7 @@
         {% endif %}
 
         <section class="messages" id="messages" aria-live="polite"></section>
+        {# Hidden for now, kept in source for future re-enable:
         <section class="flow-meta">
           <div class="progress-card">
             <p class="progress-label" id="progressLabel">{{ initial_chat_state.progressLabel }}</p>
@@ -112,6 +113,7 @@
             <pre id="debugPanel">{{ initial_chat_state.debug|tojson(indent=2) }}</pre>
           </div>
         </section>
+        #}
 
         <p class="error-text" id="errorText" hidden></p>
 
@@ -508,6 +510,9 @@
     }
 
     function updateFlowMeta(payload) {
+      if (!progressLabelEl || !debugPanelEl) {
+        return;
+      }
       progressLabelEl.textContent = payload.progressLabel || "Step in progress";
       const debugPayload = payload.debug || {};
       const shown = debugView === "history"

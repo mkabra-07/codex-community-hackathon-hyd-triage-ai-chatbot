@@ -81,9 +81,20 @@ _ARTICLE_DURATION_PATTERN = re.compile(
 
 
 def interpret_medical_input(text: str, llm_fallback=None) -> Dict[str, Any]:
-    symptoms_result = validate_and_normalize_symptom(text, llm_fallback=llm_fallback)
-    duration_result = validate_duration(text, llm_fallback=llm_fallback, allow_ambiguous=True)
-    severity_result = validate_severity(text, llm_fallback=llm_fallback, allow_ambiguous=True)
+    extracted = process_input(text, llm_fallback=llm_fallback)
+    symptoms_result = extracted["symptoms"]
+    duration_result = validate_duration(
+        text,
+        llm_fallback=llm_fallback,
+        allow_ambiguous=True,
+        extracted_data=extracted["extraction_output"],
+    )
+    severity_result = validate_severity(
+        text,
+        llm_fallback=llm_fallback,
+        allow_ambiguous=True,
+        extracted_data=extracted["extraction_output"],
+    )
     return {
         "normalized": {
             "symptoms": symptoms_result.get("symptoms", []),
@@ -91,34 +102,79 @@ def interpret_medical_input(text: str, llm_fallback=None) -> Dict[str, Any]:
             "severity": severity_result.get("severity"),
         },
         "response": _build_interpretation_reply(symptoms_result, duration_result, severity_result),
+        "extraction_output": extracted["extraction_output"],
+        "fallback_output": extracted["fallback_output"],
+        "final_merged_result": extracted["final_merged_result"],
         "symptoms": symptoms_result,
         "duration": duration_result,
         "severity": severity_result,
     }
 
 
-def validate_and_normalize_symptom(text: str, llm_fallback=None) -> Dict[str, Any]:
-    symptoms, confidence = extract_and_normalize_symptoms(text)
+def process_input(text: str, llm_fallback=None) -> Dict[str, Any]:
+    extraction_output = _normalize_extraction_output(llm_fallback(text) if llm_fallback else None)
+    fallback_symptoms, fallback_confidence = extract_and_normalize_symptoms(text)
+    symptoms_result = validate_and_normalize_symptom(
+        text,
+        llm_fallback=llm_fallback,
+        extracted_data=extraction_output,
+        fallback_result={
+            "symptoms": fallback_symptoms,
+            "confidence": fallback_confidence,
+        },
+    )
+    return {
+        "extraction_output": extraction_output,
+        "fallback_output": {
+            "symptoms": fallback_symptoms,
+            "confidence": fallback_confidence,
+        },
+        "final_merged_result": {
+            "symptoms": symptoms_result.get("symptoms", []),
+            "confidence": symptoms_result.get("confidence", "low"),
+        },
+        "symptoms": symptoms_result,
+    }
 
-    if not symptoms and llm_fallback:
-        fallback = llm_fallback(text)
-        fallback_symptoms = fallback.get("symptoms") or fallback.get("normalized") or []
-        if fallback.get("valid") and fallback_symptoms:
-            symptoms = dedupe_list([item.strip().lower() for item in fallback_symptoms if item.strip()])
-            confidence = "medium"
+
+def validate_and_normalize_symptom(text: str, llm_fallback=None, extracted_data=None, fallback_result=None) -> Dict[str, Any]:
+    extraction_output = _normalize_extraction_output(extracted_data)
+    extracted_symptoms = extraction_output["symptoms"] if extraction_output["valid"] else []
+
+    if fallback_result is None:
+        fallback_symptoms, fallback_confidence = extract_and_normalize_symptoms(text)
+    else:
+        fallback_symptoms = dedupe_list(fallback_result.get("symptoms", []))
+        fallback_confidence = fallback_result.get("confidence", "low")
+
+    if not extracted_symptoms and llm_fallback and extracted_data is None:
+        extraction_output = _normalize_extraction_output(llm_fallback(text))
+        extracted_symptoms = extraction_output["symptoms"] if extraction_output["valid"] else []
+
+    symptoms = dedupe_list(extracted_symptoms + fallback_symptoms)
+    confidence = _merged_confidence(
+        extraction_valid=bool(extracted_symptoms),
+        fallback_confidence=fallback_confidence,
+        merged_count=len(symptoms),
+    )
 
     if not symptoms:
         return {
             "valid": False,
             "classification": "UNKNOWN",
             "confidence": "low",
-            "error": (
-                "I couldn't recognize that as a medical symptom. Can you describe what "
-                "you're feeling physically (e.g., pain, fever, headache)?"
-            ),
+            "error": "I couldn’t fully understand your symptoms. Can you describe them more clearly (e.g., pain, fever, cough)?",
             "symptoms": [],
             "recognized_symptom": None,
             "needs_confirmation": False,
+            "debug": {
+                "extraction_output": extraction_output,
+                "fallback_output": {
+                    "symptoms": fallback_symptoms,
+                    "confidence": fallback_confidence,
+                },
+                "final_merged_result": {"symptoms": []},
+            },
         }
 
     return {
@@ -133,6 +189,17 @@ def validate_and_normalize_symptom(text: str, llm_fallback=None) -> Dict[str, An
             if confidence == "medium"
             else None
         ),
+        "debug": {
+            "extraction_output": extraction_output,
+            "fallback_output": {
+                "symptoms": fallback_symptoms,
+                "confidence": fallback_confidence,
+            },
+            "final_merged_result": {
+                "symptoms": symptoms,
+                "confidence": confidence,
+            },
+        },
     }
 
 
@@ -158,26 +225,30 @@ def validate_symptoms(text: str, llm_fallback=None) -> Dict[str, Any]:
     return validate_and_normalize_symptom(text, llm_fallback=llm_fallback)
 
 
-def validate_duration(text: str, llm_fallback=None, allow_ambiguous: bool = False) -> Dict[str, Any]:
+def validate_duration(text: str, llm_fallback=None, allow_ambiguous: bool = False, extracted_data=None) -> Dict[str, Any]:
     normalized = (text or "").lower().strip()
 
     parsed = _parse_duration_rules(normalized)
     if parsed:
         return parsed
 
-    if llm_fallback:
-        fallback = llm_fallback(text)
+    extraction_output = _normalize_extraction_output(extracted_data)
+    duration_days = extraction_output.get("duration_days")
+
+    if duration_days is None and llm_fallback and extracted_data is None:
+        fallback = _normalize_extraction_output(llm_fallback(text))
         duration_days = fallback.get("duration_days")
-        if duration_days is not None:
-            return {
-                "valid": True,
-                "confidence": "medium",
-                "duration_days": int(duration_days),
-                "duration": _duration_label(int(duration_days)),
-                "duration_value_hours": int(duration_days) * 24,
-                "needs_confirmation": True,
-                "confirmation_prompt": f"About {_duration_label(int(duration_days))}, thanks. Is that correct?",
-            }
+
+    if duration_days is not None:
+        return {
+            "valid": True,
+            "confidence": "medium",
+            "duration_days": int(duration_days),
+            "duration": _duration_label(int(duration_days)),
+            "duration_value_hours": int(duration_days) * 24,
+            "needs_confirmation": True,
+            "confirmation_prompt": f"About {_duration_label(int(duration_days))}, thanks. Is that correct?",
+        }
 
     if allow_ambiguous:
         return {
@@ -200,7 +271,7 @@ def validate_duration(text: str, llm_fallback=None, allow_ambiguous: bool = Fals
     }
 
 
-def validate_severity(text: str, llm_fallback=None, allow_ambiguous: bool = False) -> Dict[str, Any]:
+def validate_severity(text: str, llm_fallback=None, allow_ambiguous: bool = False, extracted_data=None) -> Dict[str, Any]:
     normalized = (text or "").strip().lower()
 
     for severity, phrases in SEVERITY_RULES.items():
@@ -228,17 +299,21 @@ def validate_severity(text: str, llm_fallback=None, allow_ambiguous: bool = Fals
                     "confirmation_prompt": f"Got it - {severity} severity. Is that correct?",
                 }
 
-    if llm_fallback:
-        fallback = llm_fallback(text)
+    extraction_output = _normalize_extraction_output(extracted_data)
+    severity = extraction_output.get("severity")
+
+    if severity is None and llm_fallback and extracted_data is None:
+        fallback = _normalize_extraction_output(llm_fallback(text))
         severity = fallback.get("severity")
-        if severity in {"mild", "moderate", "severe"}:
-            return {
-                "valid": True,
-                "severity": severity,
-                "confidence": "medium",
-                "needs_confirmation": True,
-                "confirmation_prompt": f"Got it - {severity} severity. Is that correct?",
-            }
+
+    if severity in {"mild", "moderate", "severe"}:
+        return {
+            "valid": True,
+            "severity": severity,
+            "confidence": "medium",
+            "needs_confirmation": True,
+            "confirmation_prompt": f"Got it - {severity} severity. Is that correct?",
+        }
 
     if allow_ambiguous:
         return {
@@ -405,3 +480,39 @@ def dedupe_list(values: List[str]) -> List[str]:
         if cleaned and cleaned not in seen:
             seen.append(cleaned)
     return seen
+
+
+def _normalize_extraction_output(value) -> Dict[str, Any]:
+    payload = value or {}
+    symptoms = payload.get("symptoms") or payload.get("normalized") or []
+    if isinstance(symptoms, str):
+        symptoms = [symptoms]
+    normalized_symptoms = dedupe_list([str(item).strip().lower() for item in symptoms if str(item).strip()])
+
+    duration_days = payload.get("duration_days")
+    try:
+        duration_days = int(duration_days) if duration_days is not None else None
+    except (TypeError, ValueError):
+        duration_days = None
+
+    severity = payload.get("severity")
+    severity = str(severity).strip().lower() if severity is not None else None
+    if severity not in {"mild", "moderate", "severe"}:
+        severity = None
+
+    return {
+        "valid": bool(normalized_symptoms),
+        "symptoms": normalized_symptoms,
+        "duration_days": duration_days,
+        "severity": severity,
+    }
+
+
+def _merged_confidence(extraction_valid: bool, fallback_confidence: str, merged_count: int) -> str:
+    if extraction_valid and fallback_confidence == "high":
+        return "high"
+    if fallback_confidence == "high" and not extraction_valid:
+        return "high"
+    if extraction_valid or fallback_confidence == "medium":
+        return "medium"
+    return fallback_confidence or "low"

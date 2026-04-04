@@ -39,6 +39,7 @@ def _empty_triage_state() -> Dict[str, object]:
         "history_summary": [],
         "last_result": None,
         "pending_confirmation": None,
+        "latest_input_processing": {},
     }
 
 

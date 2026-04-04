@@ -102,6 +102,7 @@ def _handle_symptoms(
     user_id: str | None,
 ):
     parsed = _interpret_input(user_input, openai_client, model)
+    _store_input_processing(session_key, session, parsed)
     symptom_validation = parsed["symptoms"]
     if not symptom_validation["valid"]:
         reply = f"This is not medical advice. {symptom_validation['error']}"
@@ -143,6 +144,7 @@ def _handle_duration(
     user_id: str | None,
 ):
     parsed = _interpret_input(user_input, openai_client, model)
+    _store_input_processing(session_key, session, parsed)
     duration_validation = parsed["duration"]
     if not duration_validation["valid"]:
         reply = f"This is not medical advice. {duration_validation['error']}"
@@ -178,6 +180,7 @@ def _handle_severity(
     user_id: str | None,
 ):
     parsed = _interpret_input(user_input, openai_client, model)
+    _store_input_processing(session_key, session, parsed)
     severity_validation = parsed["severity"]
     if not severity_validation["valid"]:
         reply = f"This is not medical advice. {severity_validation['error']}"
@@ -641,6 +644,7 @@ def _debug_payload(session: Dict[str, Any], patient_history_context: Dict[str, A
         "duration_value_hours": triage.get("duration_value_hours"),
         "severity": triage["severity"],
         "pending_confirmation": triage.get("pending_confirmation"),
+        "input_processing": triage.get("latest_input_processing"),
         "additional_answers": triage["additional_answers"],
         "pending_follow_ups": [item["key"] for item in triage["pending_follow_ups"]],
         "last_result": triage["last_result"],
@@ -755,3 +759,17 @@ def _interpret_input(user_input: str, openai_client, model: str) -> Dict[str, An
         user_input,
         llm_fallback=lambda text: extract_structured_input_with_llm(openai_client, model, text),
     )
+
+
+def _store_input_processing(session_key: str, session: Dict[str, Any], parsed: Dict[str, Any]):
+    update_triage_state(
+        session_key,
+        {
+            "latest_input_processing": {
+                "extraction_output": parsed.get("extraction_output"),
+                "fallback_output": parsed.get("fallback_output"),
+                "final_merged_result": parsed.get("final_merged_result"),
+            }
+        },
+    )
+    session["triage"] = update_triage_state(session_key)
