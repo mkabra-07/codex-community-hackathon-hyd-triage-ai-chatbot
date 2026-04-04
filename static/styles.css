@@ -537,6 +537,7 @@ body.modal-open {
 .composer {
   grid-template-columns: 1fr auto auto;
   padding: 18px 24px 24px;
+  align-items: end;
 }
 
 .auth-form {
@@ -568,8 +569,13 @@ button {
   border-radius: 16px;
   padding: 15px 18px;
   font-size: 1rem;
+  line-height: 1.2;
   outline: none;
   background: rgba(255, 255, 255, 0.96);
+}
+
+.composer input {
+  height: 56px;
 }
 
 .composer input:focus,
@@ -593,6 +599,11 @@ button {
   font-size: 0.98rem;
   font-weight: 700;
   cursor: pointer;
+}
+
+.composer button {
+  height: 56px;
+  align-self: end;
 }
 
 .voice-button {
