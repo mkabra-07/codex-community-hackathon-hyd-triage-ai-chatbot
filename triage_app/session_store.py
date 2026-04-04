@@ -30,6 +30,7 @@ def _empty_triage_state() -> Dict[str, object]:
         "stage": Stage.SYMPTOM_COLLECTION,
         "symptoms": [],
         "duration": None,
+        "duration_days": None,
         "duration_value_hours": None,
         "severity": None,
         "additional_answers": {},
@@ -37,6 +38,7 @@ def _empty_triage_state() -> Dict[str, object]:
         "completed_follow_ups": [],
         "history_summary": [],
         "last_result": None,
+        "pending_confirmation": None,
     }
 
 

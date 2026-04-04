@@ -1,4 +1,5 @@
 import json
+from io import BytesIO
 from typing import Any, Dict
 
 from openai import OpenAI
@@ -53,11 +54,46 @@ Return valid JSON only in this exact shape:
 }
 """.strip()
 
+MEDICAL_INPUT_EXTRACTION_PROMPT = """
+Extract structured medical input from the user's message.
+
+Return valid JSON only with this exact shape:
+{
+  "symptoms": [],
+  "duration_days": null,
+  "severity": null
+}
+
+Rules:
+- Normalize symptoms into short canonical medical labels.
+- Convert natural language durations into approximate days when needed.
+- Normalize severity into one of: mild, moderate, severe.
+- Leave any unknown field as null or [].
+""".strip()
+
 
 def create_openai_client(api_key: str):
     if not api_key:
         return None
     return OpenAI(api_key=api_key)
+
+
+def transcribe_audio(client, audio_bytes: bytes, filename: str = "recording.webm") -> Dict[str, Any]:
+    if client is None:
+        raise ValueError("Speech transcription is not configured.")
+    if not audio_bytes:
+        raise ValueError("No audio received.")
+
+    audio_file = BytesIO(audio_bytes)
+    audio_file.name = filename
+
+    response = client.audio.transcriptions.create(
+        model="whisper-1",
+        file=audio_file,
+    )
+
+    text = str(getattr(response, "text", "") or "").strip()
+    return {"text": text}
 
 
 def normalize_symptom_with_llm(client, model: str, text: str) -> Dict[str, Any]:
@@ -83,6 +119,43 @@ def normalize_symptom_with_llm(client, model: str, text: str) -> Dict[str, Any]:
     return {
         "valid": bool(parsed.get("valid")),
         "normalized": [str(item).strip().lower() for item in normalized if str(item).strip()],
+    }
+
+
+def extract_structured_input_with_llm(client, model: str, text: str) -> Dict[str, Any]:
+    if client is None:
+        return {"symptoms": [], "duration_days": None, "severity": None}
+
+    response = client.chat.completions.create(
+        model=model,
+        response_format={"type": "json_object"},
+        temperature=0,
+        messages=[
+            {"role": "system", "content": MEDICAL_INPUT_EXTRACTION_PROMPT},
+            {"role": "user", "content": text},
+        ],
+    )
+
+    raw_content = response.choices[0].message.content or "{}"
+    parsed = json.loads(raw_content)
+    symptoms = parsed.get("symptoms", []) or []
+    if isinstance(symptoms, str):
+        symptoms = [symptoms]
+
+    severity = parsed.get("severity")
+    if severity is not None:
+        severity = str(severity).strip().lower()
+
+    duration_days = parsed.get("duration_days")
+    try:
+        duration_days = int(duration_days) if duration_days is not None else None
+    except (TypeError, ValueError):
+        duration_days = None
+
+    return {
+        "symptoms": [str(item).strip().lower() for item in symptoms if str(item).strip()],
+        "duration_days": duration_days,
+        "severity": severity if severity in {"mild", "moderate", "severe"} else None,
     }
 
 

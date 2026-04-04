@@ -23,13 +23,14 @@ from .database import (
     update_user_profile,
 )
 from .history_summary import summarize_patient_history
-from .openai_service import create_openai_client
+from .openai_service import create_openai_client, transcribe_audio
 from .session_store import append_message, get_session
 from .chat_flow import build_initial_prompt, handle_chat
 
 
 def register_routes(app: Flask) -> None:
     openai_client = create_openai_client(app.config["OPENAI_API_KEY"])
+    app.extensions["openai_client"] = openai_client
 
     @app.before_request
     def load_current_user():
@@ -198,72 +199,39 @@ def register_routes(app: Flask) -> None:
 
         if not session_id or not message:
             return jsonify({"error": "sessionId and message are required."}), 400
+        response_payload, status_code = _process_chat_message(session_id, message)
+        return jsonify(_camelize_payload(response_payload)), status_code
 
-        user = g.user
-        session_key = f"{user['id']}:{session_id}"
-        session_profile = _profile_payload(user)
-        session_state = get_session(session_key, base_profile=session_profile)
+    @app.post("/voice")
+    @login_required
+    def voice():
+        session_id = request.form.get("sessionId", "").strip()
+        audio_file = request.files.get("audio")
 
-        append_message(session_key, "user", message)
-        _persist_message(user["id"], session_id, "user", message)
-        history_context = summarize_patient_history(
-            user_id=user["id"],
-            db_path=app.config["SQLITE_PATH"],
-            client=openai_client,
-            model=app.config["OPENAI_MODEL"],
-            limit=50,
-        )
+        if not session_id or audio_file is None:
+            return jsonify({"error": "sessionId and audio are required."}), 400
+
+        audio_bytes = audio_file.read()
+        if not audio_bytes:
+            return jsonify({"error": "Couldn't hear you, please try again."}), 400
 
         try:
-            response_payload = handle_chat(
-                user_input=message,
-                session_key=session_key,
-                session=session_state,
-                openai_client=openai_client,
-                model=app.config["OPENAI_MODEL"],
-                patient_history_context=history_context,
-                db_path=app.config["SQLITE_PATH"],
-                user_id=user["id"],
+            transcription = transcribe_audio(
+                openai_client,
+                audio_bytes=audio_bytes,
+                filename=audio_file.filename or "recording.webm",
             )
-            _sync_session_profile_to_user(user["id"], session_state["profile"])
-            _persist_message(
-                user["id"],
-                session_id,
-                "assistant",
-                response_payload["reply"],
-                response_payload["assessment"],
-            )
-            return jsonify(_camelize_payload(response_payload))
         except Exception:
-            fallback_reply = (
-                "This is not medical advice. I'm having trouble completing the triage "
-                "assessment right now, so the safest next step is to contact a doctor. "
-                "If symptoms are severe or worsening, seek urgent care immediately."
-            )
-            fallback_assessment = {
-                "risk_level": "URGENT",
-                "reasoning": "The system could not complete the assessment safely.",
-                "summary": fallback_reply,
-                "next_steps": ["Contact a clinician for further assessment."],
-            }
-            append_message(session_key, "assistant", fallback_reply, {"stage": "TRIAGE_RESULT", "risk_level": "URGENT"})
-            _persist_message(user["id"], session_id, "assistant", fallback_reply, fallback_assessment)
-            return (
-                jsonify(
-                    {
-                        "reply": fallback_reply,
-                        "assessment": fallback_assessment,
-                        "stage": "TRIAGE_RESULT",
-                        "progressLabel": "Final step: Triage result",
-                        "debug": {
-                            **session_state["triage"],
-                            "history_summary": history_context.get("generated_summary"),
-                            "raw_history": history_context.get("raw_history"),
-                        },
-                    }
-                ),
-                500,
-            )
+            return jsonify({"error": "Voice transcription is unavailable right now. Please try typing instead."}), 502
+
+        transcribed_text = transcription["text"].strip()
+        if not transcribed_text:
+            return jsonify({"error": "Couldn't hear you, please try again."}), 400
+
+        response_payload, status_code = _process_chat_message(session_id, transcribed_text)
+        payload = _camelize_payload(response_payload)
+        payload["transcribedText"] = transcribed_text
+        return jsonify(payload), status_code
 
 
 def login_required(view):
@@ -286,6 +254,7 @@ def _camelize_payload(payload):
         "assessment": payload["assessment"],
         "stage": payload.get("stage"),
         "progressLabel": payload.get("progressLabel"),
+        "normalized": payload.get("normalized"),
         "debug": payload.get("debug"),
     }
 
@@ -346,3 +315,74 @@ def _sync_session_profile_to_user(user_id: str, profile: Dict[str, object]) -> N
         age=int(age) if age not in ("", None) else None,
         existing_conditions=existing_conditions if existing_conditions else None,
     )
+
+
+def _process_chat_message(session_id: str, message: str):
+    user = g.user
+    session_key = f"{user['id']}:{session_id}"
+    session_profile = _profile_payload(user)
+    session_state = get_session(session_key, base_profile=session_profile)
+
+    append_message(session_key, "user", message)
+    _persist_message(user["id"], session_id, "user", message)
+    history_context = summarize_patient_history(
+        user_id=user["id"],
+        db_path=current_app.config["SQLITE_PATH"],
+        client=current_app.extensions.get("openai_client"),
+        model=current_app.config["OPENAI_MODEL"],
+        limit=50,
+    )
+
+    try:
+        response_payload = handle_chat(
+            user_input=message,
+            session_key=session_key,
+            session=session_state,
+            openai_client=current_app.extensions.get("openai_client"),
+            model=current_app.config["OPENAI_MODEL"],
+            patient_history_context=history_context,
+            db_path=current_app.config["SQLITE_PATH"],
+            user_id=user["id"],
+        )
+        _sync_session_profile_to_user(user["id"], session_state["profile"])
+        _persist_message(
+            user["id"],
+            session_id,
+            "assistant",
+            response_payload["reply"],
+            response_payload["assessment"],
+        )
+        return response_payload, 200
+    except Exception:
+        fallback_reply = (
+            "This is not medical advice. I'm having trouble completing the triage "
+            "assessment right now, so the safest next step is to contact a doctor. "
+            "If symptoms are severe or worsening, seek urgent care immediately."
+        )
+        fallback_assessment = {
+            "risk_level": "URGENT",
+            "reasoning": "The system could not complete the assessment safely.",
+            "summary": fallback_reply,
+            "next_steps": ["Contact a clinician for further assessment."],
+        }
+        append_message(session_key, "assistant", fallback_reply, {"stage": "TRIAGE_RESULT", "risk_level": "URGENT"})
+        _persist_message(user["id"], session_id, "assistant", fallback_reply, fallback_assessment)
+        return (
+            {
+                "reply": fallback_reply,
+                "assessment": fallback_assessment,
+                "stage": "TRIAGE_RESULT",
+                "progressLabel": "Final step: Triage result",
+                "normalized": {
+                    "symptoms": session_state["triage"].get("symptoms", []),
+                    "duration_days": session_state["triage"].get("duration_days"),
+                    "severity": session_state["triage"].get("severity"),
+                },
+                "debug": {
+                    **session_state["triage"],
+                    "history_summary": history_context.get("generated_summary"),
+                    "raw_history": history_context.get("raw_history"),
+                },
+            },
+            500,
+        )

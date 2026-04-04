@@ -454,7 +454,7 @@ body {
 }
 
 .composer {
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr auto auto;
   padding: 18px 24px 24px;
 }
 
@@ -512,6 +512,23 @@ button {
   font-size: 0.98rem;
   font-weight: 700;
   cursor: pointer;
+}
+
+.voice-button {
+  min-width: 58px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  padding: 0 16px;
+}
+
+.voice-button.is-recording {
+  background: linear-gradient(135deg, #b42318, #7a1a12);
+}
+
+.voice-button.is-processing {
+  background: linear-gradient(135deg, #b54708, #8f5a04);
 }
 
 .composer button:disabled,

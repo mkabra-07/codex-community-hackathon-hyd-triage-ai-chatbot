@@ -123,6 +123,7 @@
             autocomplete="off"
             required
           />
+          <button type="button" id="voiceButton" class="voice-button" aria-label="Record voice input">🎤</button>
           <button type="submit" id="sendButton">Send</button>
         </form>
       </section>
@@ -148,16 +149,22 @@
     const formEl = document.getElementById("chatForm");
     const inputEl = document.getElementById("messageInput");
     const sendButtonEl = document.getElementById("sendButton");
+    const voiceButtonEl = document.getElementById("voiceButton");
     const saveProfileButtonEl = document.getElementById("saveProfileButton");
     const profileStatusEl = document.getElementById("profileStatus");
     const progressLabelEl = document.getElementById("progressLabel");
     const debugPanelEl = document.getElementById("debugPanel");
     const debugTabEls = Array.from(document.querySelectorAll(".debug-tab"));
     const historyTimelineEl = document.getElementById("historyTimeline");
+    const speechSupported = Boolean(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
 
     let profileComplete = !needsProfileCompletion;
     let debugView = "summary";
     let lastFlowPayload = initialChatState;
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let voiceState = "idle";
+    let isSending = false;
     let sessionId = localStorage.getItem(`triage-session-id-{{ user.id }}`);
     if (!sessionId) {
       sessionId = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : `session-${Date.now()}`;
@@ -183,50 +190,65 @@
       sendButtonEl.disabled = true;
     }
 
+    if (!speechSupported && voiceButtonEl) {
+      voiceButtonEl.disabled = true;
+      voiceButtonEl.title = "Voice input is not supported in this browser.";
+    }
+
     formEl.addEventListener("submit", async (event) => {
       event.preventDefault();
       const message = inputEl.value.trim();
-      if (!message || !profileComplete) {
+      if (!message || !profileComplete || isSending) {
         return;
       }
 
-      errorEl.hidden = true;
-      renderMessage({ role: "user", text: message });
       inputEl.value = "";
-      setLoading(true);
-      const typingNode = renderTyping();
+      await submitChatMessage(message);
+    });
 
-      try {
-        const response = await fetch("/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId, message })
-        });
-
-        const payload = await response.json();
-        typingNode.remove();
-
-        if (!response.ok) {
-          throw new Error(payload.error || "Something went wrong.");
+    if (voiceButtonEl) {
+      voiceButtonEl.addEventListener("click", async () => {
+        if (!profileComplete || !speechSupported || isSending) {
+          return;
         }
 
-        renderMessage({
-          role: "assistant",
-          text: payload.reply,
-          assessment: payload.assessment,
-          stage: payload.stage
-        });
-        lastFlowPayload = payload;
-        updateFlowMeta(payload);
-        refreshHistoryTimeline();
-      } catch (error) {
-        typingNode.remove();
-        errorEl.hidden = false;
-        errorEl.textContent = error.message || "Unable to reach the triage service.";
-      } finally {
-        setLoading(false);
-      }
-    });
+        if (voiceState === "recording") {
+          stopRecording();
+          return;
+        }
+
+        if (voiceState === "processing") {
+          return;
+        }
+
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          audioChunks = [];
+          mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+          mediaRecorder.addEventListener("dataavailable", (event) => {
+            if (event.data && event.data.size > 0) {
+              audioChunks.push(event.data);
+            }
+          });
+          mediaRecorder.addEventListener("stop", async () => {
+            const audioBlob = new Blob(audioChunks, { type: "audio/webm" });
+            stream.getTracks().forEach((track) => track.stop());
+            if (!audioBlob.size) {
+              setVoiceState("idle");
+              showError("Couldn't hear you, please try again.");
+              return;
+            }
+            await submitVoiceMessage(audioBlob);
+          });
+          mediaRecorder.start();
+          setVoiceState("recording");
+          errorEl.hidden = true;
+        } catch (_error) {
+          showError("Microphone access was blocked. Please try typing instead.");
+          setVoiceState("idle");
+        }
+      });
+    }
 
     if (saveProfileButtonEl) {
       saveProfileButtonEl.addEventListener("click", async () => {
@@ -334,9 +356,121 @@
     }
 
     function setLoading(isLoading) {
+      isSending = isLoading;
       inputEl.disabled = isLoading || !profileComplete;
       sendButtonEl.disabled = isLoading || !profileComplete;
+      if (voiceButtonEl) {
+        voiceButtonEl.disabled = isLoading || !profileComplete || !speechSupported || voiceState === "processing";
+      }
       sendButtonEl.textContent = isLoading ? "Sending..." : "Send";
+    }
+
+    function setVoiceState(nextState) {
+      voiceState = nextState;
+      if (!voiceButtonEl) {
+        return;
+      }
+
+      voiceButtonEl.classList.toggle("is-recording", nextState === "recording");
+      voiceButtonEl.classList.toggle("is-processing", nextState === "processing");
+
+      if (nextState === "recording") {
+        voiceButtonEl.textContent = "🔴";
+        voiceButtonEl.title = "Stop recording";
+      } else if (nextState === "processing") {
+        voiceButtonEl.textContent = "⏳";
+        voiceButtonEl.title = "Processing voice input";
+      } else {
+        voiceButtonEl.textContent = "🎤";
+        voiceButtonEl.title = "Start voice input";
+      }
+    }
+
+    function stopRecording() {
+      if (mediaRecorder && mediaRecorder.state !== "inactive") {
+        setVoiceState("processing");
+        mediaRecorder.stop();
+      }
+    }
+
+    async function submitChatMessage(message) {
+      errorEl.hidden = true;
+      renderMessage({ role: "user", text: message });
+      setLoading(true);
+      const typingNode = renderTyping();
+
+      try {
+        const response = await fetch("/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId, message })
+        });
+
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || "Something went wrong.");
+        }
+
+        renderAssistantPayload(payload);
+      } catch (error) {
+        showError(error.message || "Unable to reach the triage service.");
+      } finally {
+        typingNode.remove();
+        setLoading(false);
+      }
+    }
+
+    async function submitVoiceMessage(audioBlob) {
+      setLoading(true);
+      setVoiceState("processing");
+      const typingNode = renderTyping();
+
+      try {
+        const formData = new FormData();
+        formData.append("sessionId", sessionId);
+        formData.append("audio", audioBlob, "voice-input.webm");
+
+        const response = await fetch("/voice", {
+          method: "POST",
+          body: formData
+        });
+
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || "Voice input failed.");
+        }
+
+        renderMessage({
+          role: "user",
+          text: payload.transcribedText || "Voice message"
+        });
+        renderAssistantPayload(payload);
+      } catch (error) {
+        showError(error.message || "Voice input failed. Please try typing instead.");
+      } finally {
+        typingNode.remove();
+        setLoading(false);
+        setVoiceState("idle");
+        mediaRecorder = null;
+        audioChunks = [];
+      }
+    }
+
+    function renderAssistantPayload(payload) {
+      renderMessage({
+        role: "assistant",
+        text: payload.reply,
+        assessment: payload.assessment,
+        stage: payload.stage
+      });
+      lastFlowPayload = payload;
+      updateFlowMeta(payload);
+      refreshHistoryTimeline();
+    }
+
+    function showError(message) {
+      errorEl.hidden = false;
+      errorEl.textContent = message;
     }
 
     function updateFlowMeta(payload) {
