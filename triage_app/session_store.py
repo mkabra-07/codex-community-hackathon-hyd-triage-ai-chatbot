@@ -46,7 +46,9 @@ def get_session(session_key: str, base_profile=None) -> dict:
     if session_key not in _SESSIONS:
         _SESSIONS[session_key] = {
             "id": session_key,
+            "session_id": session_key,
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "summary": "New Chat",
             "profile": _empty_profile(),
             "history": [],
             "triage": _empty_triage_state(),
