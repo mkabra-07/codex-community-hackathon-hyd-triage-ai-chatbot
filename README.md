@@ -48,8 +48,8 @@ AITriageChatbot/
 4. Fill in `OPENAI_API_KEY`.
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -66,7 +66,7 @@ SQLITE_PATH=data/triage.db
 ## Run locally
 
 ```bash
-python app.py
+python3 app.py
 ```
 
 App URL: `http://127.0.0.1:5000`
@@ -80,12 +80,22 @@ Health check: `http://127.0.0.1:5000/health`
 - After login, users are redirected to the chatbot.
 - Flask session cookies keep the user signed in.
 
+## How To Navigate The App
+
+1. Open `http://127.0.0.1:5000/login` and sign in with a seeded account or create a new one.
+2. After login, land on the main chat screen with the global safety banner at the top.
+3. Review the patient profile card before chatting. If details are missing, save the profile first so the bot can avoid re-asking the same questions.
+4. Type symptoms into the composer at the bottom, or use the microphone button for voice input when supported.
+5. Follow the staged chat flow: symptoms, duration, severity, then follow-up questions when needed.
+6. Use the left sidebar to reopen previous chats and review stored session summaries.
+7. Use `End Session` to close the current triage session, or `Logout` to leave the app entirely.
+
 ### Seeded sample users
 
-- `Aarav Sharma / aarav123`
-- `Sara Khan / sara123`
-- `Neha Patel / neha123`
-- `Rohan Mehta / rohan123`
+- `aarav.sharma@careflow.app / aarav123`
+- `sara.khan@careflow.app / sara123`
+- `neha.patel@careflow.app / neha123`
+- `rohan.mehta@careflow.app / rohan123`
 
 Some sample users have missing fields so you can test the first-login profile completion flow.
 
@@ -120,7 +130,7 @@ Response shape:
 
 ```json
 {
-  "reply": "This is not medical advice. ...",
+  "reply": "Please share the symptoms you are experiencing.",
   "assessment": {
     "symptoms": ["fever", "cough"],
     "risk_level": "URGENT",
@@ -150,7 +160,8 @@ Response shape:
   - weight
   - existing conditions
 - It does not re-ask stored profile details unless they are missing.
-- The system never diagnoses and always includes the disclaimer: `This is not medical advice.`
+- The global warning banner stays visible at the top of the chat UI for safety messaging.
+- Individual assistant messages stay clean and do not repeat the warning banner copy.
 - If the model is unavailable or uncertain, the workflow escalates conservatively to a clinician.
 
 ## Notes

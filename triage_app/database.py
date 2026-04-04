@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import sqlite3
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
@@ -54,6 +55,36 @@ SAMPLE_USERS = [
 
 def _connect(db_path: str):
     return closing(sqlite3.connect(db_path))
+
+
+def _database_is_healthy(db_path: str) -> bool:
+    if not os.path.exists(db_path):
+        return False
+
+    try:
+        with sqlite3.connect(db_path) as connection:
+            row = connection.execute("PRAGMA integrity_check;").fetchone()
+    except sqlite3.DatabaseError:
+        return False
+
+    return bool(row) and row[0] == "ok"
+
+
+def prepare_database_path(db_path: str) -> str:
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    source_path = db_path if os.path.isabs(db_path) else os.path.join(project_root, db_path)
+
+    if os.getenv("VERCEL") != "1":
+        return source_path
+
+    runtime_dir = os.path.join("/tmp", "triage-healthcare-chatbot")
+    os.makedirs(runtime_dir, exist_ok=True)
+    runtime_path = os.path.join(runtime_dir, os.path.basename(source_path))
+
+    if not os.path.exists(runtime_path) and _database_is_healthy(source_path):
+        shutil.copy2(source_path, runtime_path)
+
+    return runtime_path
 
 
 def initialize_database(db_path: str) -> None:

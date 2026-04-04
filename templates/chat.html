@@ -181,7 +181,7 @@
     const initialMessage = {
       role: "assistant",
       text: needsProfileCompletion
-        ? "This is not medical advice. Before we continue, please complete your saved profile so I don't keep asking the same personal questions."
+        ? "Before we continue, please complete your saved profile so I don't keep asking the same personal questions."
         : initialChatState.reply,
       assessment: needsProfileCompletion ? null : initialChatState.assessment,
       stage: initialChatState.stage

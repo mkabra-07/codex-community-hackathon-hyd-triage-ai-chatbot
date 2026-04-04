@@ -4,6 +4,8 @@ from typing import Any, Dict
 
 from openai import OpenAI
 
+from .message_format import sanitize_assistant_text
+
 
 TRIAGE_SYSTEM_PROMPT = """
 You are a healthcare triage assistant.
@@ -200,9 +202,11 @@ def generate_triage_explanation(
             "reasoning",
             "The final recommendation was based on the collected symptom details, severity, duration, and follow-up answers.",
         ),
-        "summary": parsed.get(
-            "summary",
-            "This is not medical advice. Based on the information collected, please follow the recommended next step below.",
+        "summary": sanitize_assistant_text(
+            parsed.get(
+                "summary",
+                "Based on the information collected, please follow the recommended next step below.",
+            )
         ),
         "next_steps": parsed.get("next_steps", []) or ["Contact a clinician if you feel unsure or symptoms worsen."],
     }
@@ -215,25 +219,19 @@ def build_fallback_explanation(context: Dict[str, Any], rules_result: Dict[str, 
     symptoms = context.get("current_message") or "your symptoms"
 
     if risk_level == "EMERGENCY":
-        summary = (
-            "This is not medical advice. Based on the information collected, this may need emergency attention."
-        )
+        summary = "Based on the information collected, this may need emergency attention."
         next_steps = [
             "Seek immediate medical attention now.",
             "Call local emergency services if symptoms are severe or worsening quickly.",
         ]
     elif risk_level == "URGENT":
-        summary = (
-            "This is not medical advice. Based on the information collected, you should speak with a doctor within 24 hours."
-        )
+        summary = "Based on the information collected, you should speak with a doctor within 24 hours."
         next_steps = [
             "Consult a doctor within 24 hours.",
             "Seek urgent care sooner if symptoms worsen or new red flags appear.",
         ]
     else:
-        summary = (
-            "This is not medical advice. Based on the information collected, this does not currently sound like an emergency."
-        )
+        summary = "Based on the information collected, this does not currently sound like an emergency."
         next_steps = [
             "Monitor symptoms, rest, and stay hydrated.",
             "Contact a clinician if symptoms persist or worsen.",

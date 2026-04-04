@@ -1,10 +1,8 @@
 import re
 from typing import Any, Dict, List
 
+from .message_format import sanitize_assistant_text
 from .session_store import append_message, update_profile
-
-
-DISCLAIMER = "This is not medical advice."
 
 RED_FLAG_PATTERNS = [
     ("chest pain", re.compile(r"\bchest pain\b", re.IGNORECASE)),
@@ -60,11 +58,11 @@ def build_emergency_response(session_id: str, red_flags: List[str]) -> Dict[str,
     ]
     reply = " ".join(
         [
-            DISCLAIMER,
             "Your symptoms may need emergency care.",
             "Please seek immediate medical attention now.",
         ]
     )
+    reply = sanitize_assistant_text(reply)
 
     append_message(session_id, "assistant", reply, {"risk_level": "EMERGENCY"})
     return {
@@ -110,7 +108,6 @@ def build_assistant_reply(session_id: str, assessment: Dict[str, Any], profile: 
         follow_up_questions = [item["question"] for item in missing[:2]]
         reply = " ".join(
             [
-                DISCLAIMER,
                 "I'm assessing how urgent this may be, but I need a little more information first.",
                 " ".join(follow_up_questions),
             ]
@@ -118,7 +115,6 @@ def build_assistant_reply(session_id: str, assessment: Dict[str, Any], profile: 
     elif risk_level == "URGENT":
         reply = " ".join(
             [
-                DISCLAIMER,
                 "Based on the information shared, this sounds urgent enough that you should consult a doctor within 24 hours.",
                 "If symptoms worsen, you develop chest pain, trouble breathing, or severe bleeding, seek emergency care immediately.",
             ]
@@ -126,11 +122,11 @@ def build_assistant_reply(session_id: str, assessment: Dict[str, Any], profile: 
     else:
         reply = " ".join(
             [
-                DISCLAIMER,
                 "This does not sound like an emergency from the information shared so far.",
                 "Home care may be reasonable, but contact a clinician if symptoms worsen, persist, or you feel unsure.",
             ]
         )
+    reply = sanitize_assistant_text(reply)
 
     final_assessment = {
         "symptoms": profile.get("symptoms", []),

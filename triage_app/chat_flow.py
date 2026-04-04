@@ -1,6 +1,7 @@
 from typing import Any, Dict, List
 
 from .context_engine import build_context, build_current_symptom_snapshot, build_history_summary
+from .message_format import sanitize_assessment, sanitize_assistant_text
 from .openai_service import extract_structured_input_with_llm, generate_triage_explanation
 from .rules_engine import calculate_risk
 from .session_store import Stage, append_message, reset_triage_state, update_profile, update_triage_state
@@ -82,7 +83,7 @@ def handle_chat(
 def build_initial_prompt(session: Dict[str, Any], patient_history_context: Dict[str, Any] | None = None) -> Dict[str, Any]:
     triage = session["triage"]
     return {
-        "reply": "This is not medical advice. What symptoms are you experiencing?",
+        "reply": "What symptoms are you experiencing?",
         "stage": triage["stage"],
         "progressLabel": STAGE_LABELS[triage["stage"]],
         "assessment": None,
@@ -105,8 +106,8 @@ def _handle_symptoms(
     _store_input_processing(session_key, session, parsed)
     symptom_validation = parsed["symptoms"]
     if not symptom_validation["valid"]:
-        reply = f"This is not medical advice. {symptom_validation['error']}"
-        append_message(session_key, "assistant", reply, {"stage": Stage.SYMPTOM_COLLECTION})
+        reply = symptom_validation["error"]
+        _append_assistant_message(session_key, reply, {"stage": Stage.SYMPTOM_COLLECTION})
         return _response(reply, session, patient_history_context=patient_history_context)
 
     if symptom_validation.get("needs_confirmation"):
@@ -147,8 +148,8 @@ def _handle_duration(
     _store_input_processing(session_key, session, parsed)
     duration_validation = parsed["duration"]
     if not duration_validation["valid"]:
-        reply = f"This is not medical advice. {duration_validation['error']}"
-        append_message(session_key, "assistant", reply, {"stage": Stage.DURATION_COLLECTION})
+        reply = duration_validation["error"]
+        _append_assistant_message(session_key, reply, {"stage": Stage.DURATION_COLLECTION})
         return _response(reply, session, patient_history_context=patient_history_context)
 
     if duration_validation.get("needs_confirmation"):
@@ -183,8 +184,8 @@ def _handle_severity(
     _store_input_processing(session_key, session, parsed)
     severity_validation = parsed["severity"]
     if not severity_validation["valid"]:
-        reply = f"This is not medical advice. {severity_validation['error']}"
-        append_message(session_key, "assistant", reply, {"stage": Stage.SEVERITY_COLLECTION})
+        reply = severity_validation["error"]
+        _append_assistant_message(session_key, reply, {"stage": Stage.SEVERITY_COLLECTION})
         return _response(reply, session, patient_history_context=patient_history_context)
 
     if severity_validation.get("needs_confirmation"):
@@ -212,8 +213,8 @@ def _handle_severity(
 
     if follow_ups:
         question = follow_ups[0]["question"]
-        reply = f"This is not medical advice. Got it - {severity_validation['severity']} severity. {question}"
-        append_message(session_key, "assistant", reply, {"stage": Stage.FOLLOW_UPS})
+        reply = f"Got it - {severity_validation['severity']} severity. {question}"
+        _append_assistant_message(session_key, reply, {"stage": Stage.FOLLOW_UPS})
         return _response(reply, session, patient_history_context=patient_history_context)
 
     return _build_final_response(
@@ -238,8 +239,8 @@ def _handle_follow_ups(
     if current:
         normalized_answer = _normalize_follow_up_answer(current, user_input)
         if not normalized_answer["valid"]:
-            reply = f"This is not medical advice. {normalized_answer['error']}"
-            append_message(session_key, "assistant", reply, {"stage": Stage.FOLLOW_UPS})
+            reply = normalized_answer["error"]
+            _append_assistant_message(session_key, reply, {"stage": Stage.FOLLOW_UPS})
             return _response(reply, session, patient_history_context=patient_history_context)
 
         additional_answers = {
@@ -267,8 +268,8 @@ def _handle_follow_ups(
 
     if session["triage"]["pending_follow_ups"]:
         question = session["triage"]["pending_follow_ups"][0]["question"]
-        reply = f"This is not medical advice. {question}"
-        append_message(session_key, "assistant", reply, {"stage": Stage.FOLLOW_UPS})
+        reply = question
+        _append_assistant_message(session_key, reply, {"stage": Stage.FOLLOW_UPS})
         return _response(reply, session, patient_history_context=patient_history_context)
 
     return _build_final_response(
@@ -290,12 +291,9 @@ def _build_final_response(
 
     rules_result = calculate_risk(session["triage"])
     if rules_result["risk_level"] is None:
-        reply = (
-            "This is not medical advice. I couldn't recognize a valid medical symptom, "
-            "so please start again by describing what you're feeling physically."
-        )
+        reply = "I couldn't recognize a valid medical symptom, so please start again by describing what you're feeling physically."
         session["triage"] = reset_triage_state(session_key)
-        append_message(session_key, "assistant", reply, {"stage": Stage.SYMPTOM_COLLECTION})
+        _append_assistant_message(session_key, reply, {"stage": Stage.SYMPTOM_COLLECTION})
         return _response(reply, session, assessment=None, patient_history_context=patient_history_context)
 
     explanation = generate_triage_explanation(
@@ -313,9 +311,8 @@ def _build_final_response(
     }
     session["triage"] = update_triage_state(session_key, {"last_result": assessment})
     reply = assessment["summary"]
-    append_message(
+    _append_assistant_message(
         session_key,
-        "assistant",
         reply,
         {"stage": Stage.TRIAGE_RESULT, "risk_level": assessment["risk_level"], "score": assessment["score"]},
     )
@@ -333,16 +330,13 @@ def _continue_after_symptoms(
     user_id: str | None,
 ):
     duration_validation = parsed["duration"]
-    reply_prefix = (
-        "This is not medical advice. "
-        f"Recognized symptoms: {', '.join(session['triage']['symptoms'])}."
-    )
+    reply_prefix = f"Recognized symptoms: {', '.join(session['triage']['symptoms'])}."
 
     if not duration_validation["valid"]:
         update_triage_state(session_key, {"stage": Stage.DURATION_COLLECTION})
         session["triage"] = update_triage_state(session_key)
         reply = f"{reply_prefix} How long have you been experiencing these symptoms?"
-        append_message(session_key, "assistant", reply, {"stage": Stage.DURATION_COLLECTION})
+        _append_assistant_message(session_key, reply, {"stage": Stage.DURATION_COLLECTION})
         return _response(reply, session, patient_history_context=patient_history_context)
 
     if duration_validation.get("needs_confirmation"):
@@ -365,7 +359,7 @@ def _continue_after_symptoms(
         update_triage_state(session_key, {"stage": Stage.SEVERITY_COLLECTION})
         session["triage"] = update_triage_state(session_key)
         reply = f"{reply_prefix} About {duration_validation['duration']}, thanks. How severe is it right now?"
-        append_message(session_key, "assistant", reply, {"stage": Stage.SEVERITY_COLLECTION})
+        _append_assistant_message(session_key, reply, {"stage": Stage.SEVERITY_COLLECTION})
         return _response(reply, session, patient_history_context=patient_history_context)
 
     if severity_validation.get("needs_confirmation"):
@@ -401,7 +395,7 @@ def _continue_after_symptoms(
             f"{reply_prefix} About {duration_validation['duration']}, thanks. "
             f"Got it - {severity_validation['severity']} severity. {question}"
         )
-        append_message(session_key, "assistant", reply, {"stage": Stage.FOLLOW_UPS})
+        _append_assistant_message(session_key, reply, {"stage": Stage.FOLLOW_UPS})
         return _response(reply, session, patient_history_context=patient_history_context)
 
     return _build_final_response(
@@ -425,8 +419,8 @@ def _continue_after_duration(
     if not severity_validation["valid"]:
         update_triage_state(session_key, {"stage": Stage.SEVERITY_COLLECTION})
         session["triage"] = update_triage_state(session_key)
-        reply = f"This is not medical advice. About {duration}, thanks. How severe is it right now?"
-        append_message(session_key, "assistant", reply, {"stage": Stage.SEVERITY_COLLECTION})
+        reply = f"About {duration}, thanks. How severe is it right now?"
+        _append_assistant_message(session_key, reply, {"stage": Stage.SEVERITY_COLLECTION})
         return _response(reply, session, patient_history_context=patient_history_context)
 
     if severity_validation.get("needs_confirmation"):
@@ -438,7 +432,7 @@ def _continue_after_duration(
             field="severity",
             value=severity_validation,
             original_stage=Stage.SEVERITY_COLLECTION,
-            prompt=f"This is not medical advice. About {duration}, thanks. {severity_validation['confirmation_prompt']}",
+            prompt=f"About {duration}, thanks. {severity_validation['confirmation_prompt']}",
             prompt_on_reject="No problem. How severe does it feel right now?",
             patient_history_context=patient_history_context,
         )
@@ -456,8 +450,8 @@ def _continue_after_duration(
 
     if follow_ups:
         question = follow_ups[0]["question"]
-        reply = f"This is not medical advice. About {duration}, thanks. Got it - {severity_validation['severity']} severity. {question}"
-        append_message(session_key, "assistant", reply, {"stage": Stage.FOLLOW_UPS})
+        reply = f"About {duration}, thanks. Got it - {severity_validation['severity']} severity. {question}"
+        _append_assistant_message(session_key, reply, {"stage": Stage.FOLLOW_UPS})
         return _response(reply, session, patient_history_context=patient_history_context)
 
     return _build_final_response(
@@ -487,8 +481,8 @@ def _request_confirmation(
         },
     )
     session["triage"] = update_triage_state(session_key)
-    reply = f"This is not medical advice. {prompt}" if not prompt.startswith("This is not medical advice.") else prompt
-    append_message(session_key, "assistant", reply, {"stage": original_stage})
+    reply = prompt
+    _append_assistant_message(session_key, reply, {"stage": original_stage})
     return _response(reply, session, patient_history_context=patient_history_context)
 
 
@@ -616,14 +610,19 @@ def _response(
     patient_history_context: Dict[str, Any] | None = None,
 ):
     stage = session["triage"]["stage"]
+    clean_reply = sanitize_assistant_text(reply)
     return {
-        "reply": reply,
-        "assessment": assessment,
+        "reply": clean_reply,
+        "assessment": sanitize_assessment(assessment),
         "stage": stage,
         "progressLabel": STAGE_LABELS[stage],
         "normalized": _normalized_payload(session),
         "debug": _debug_payload(session, patient_history_context),
     }
+
+
+def _append_assistant_message(session_key: str, reply: str, metadata=None):
+    append_message(session_key, "assistant", sanitize_assistant_text(reply), metadata)
 
 
 def _normalized_payload(session: Dict[str, Any]) -> Dict[str, Any]:
@@ -686,12 +685,12 @@ def _handle_pending_confirmation(
             },
         )
         session["triage"] = update_triage_state(session_key)
-        reply = f"This is not medical advice. {pending['prompt_on_reject']}"
-        append_message(session_key, "assistant", reply, {"stage": pending["original_stage"]})
+        reply = pending["prompt_on_reject"]
+        _append_assistant_message(session_key, reply, {"stage": pending["original_stage"]})
         return _response(reply, session, patient_history_context=patient_history_context)
 
-    reply = "This is not medical advice. Please answer yes or no so I can make sure I understood correctly."
-    append_message(session_key, "assistant", reply, {"stage": session["triage"]["stage"]})
+    reply = "Please answer yes or no so I can make sure I understood correctly."
+    _append_assistant_message(session_key, reply, {"stage": session["triage"]["stage"]})
     return _response(reply, session, patient_history_context=patient_history_context)
 
 
@@ -717,18 +716,18 @@ def _apply_confirmed_value(
             },
         )
         session["triage"] = update_triage_state(session_key)
-        reply = f"This is not medical advice. Thanks for confirming. Recognized symptoms: {', '.join(value)}. How long have you been experiencing these symptoms?"
+        reply = f"Thanks for confirming. Recognized symptoms: {', '.join(value)}. How long have you been experiencing these symptoms?"
         update_triage_state(session_key, {"stage": Stage.DURATION_COLLECTION})
         session["triage"] = update_triage_state(session_key)
-        append_message(session_key, "assistant", reply, {"stage": Stage.DURATION_COLLECTION})
+        _append_assistant_message(session_key, reply, {"stage": Stage.DURATION_COLLECTION})
         return _response(reply, session, patient_history_context=patient_history_context)
 
     if field == "duration":
         _apply_duration(session_key, session, value)
         update_triage_state(session_key, {"stage": Stage.SEVERITY_COLLECTION})
         session["triage"] = update_triage_state(session_key)
-        reply = f"This is not medical advice. About {value['duration']}, thanks! How severe is it right now?"
-        append_message(session_key, "assistant", reply, {"stage": Stage.SEVERITY_COLLECTION})
+        reply = f"About {value['duration']}, thanks! How severe is it right now?"
+        _append_assistant_message(session_key, reply, {"stage": Stage.SEVERITY_COLLECTION})
         return _response(reply, session, patient_history_context=patient_history_context)
 
     if field == "severity":
@@ -744,8 +743,8 @@ def _apply_confirmed_value(
         session["triage"] = update_triage_state(session_key)
         if follow_ups:
             question = follow_ups[0]["question"]
-            reply = f"This is not medical advice. Thanks for confirming. Got it - {value['severity']} severity. {question}"
-            append_message(session_key, "assistant", reply, {"stage": Stage.FOLLOW_UPS})
+            reply = f"Thanks for confirming. Got it - {value['severity']} severity. {question}"
+            _append_assistant_message(session_key, reply, {"stage": Stage.FOLLOW_UPS})
             return _response(reply, session, patient_history_context=patient_history_context)
         return _build_final_response(
             session_key, session, openai_client, model, patient_history_context, db_path, user_id

@@ -30,6 +30,7 @@ from .database import (
     update_user_profile,
 )
 from .history_summary import summarize_patient_history
+from .message_format import sanitize_assessment, sanitize_assistant_text
 from .openai_service import create_openai_client, transcribe_audio
 from .session_store import append_message, get_session
 from .session_summaries import get_session_detail, list_sessions_page, maybe_refresh_session_summary
@@ -631,10 +632,9 @@ def _process_chat_message(session_id: str, message: str):
         )
         return response_payload, 200
     except Exception:
-        fallback_reply = (
-            "This is not medical advice. I'm having trouble completing the triage "
-            "assessment right now, so the safest next step is to contact a doctor. "
-            "If symptoms are severe or worsening, seek urgent care immediately."
+        fallback_reply = sanitize_assistant_text(
+            "I'm having trouble completing the triage assessment right now, so the safest next step is to "
+            "contact a doctor. If symptoms are severe or worsening, seek urgent care immediately."
         )
         fallback_assessment = {
             "risk_level": "URGENT",
@@ -655,7 +655,7 @@ def _process_chat_message(session_id: str, message: str):
         return (
             {
                 "reply": fallback_reply,
-                "assessment": fallback_assessment,
+                "assessment": sanitize_assessment(fallback_assessment),
                 "stage": "TRIAGE_RESULT",
                 "progressLabel": "Final step: Triage result",
                 "normalized": {
