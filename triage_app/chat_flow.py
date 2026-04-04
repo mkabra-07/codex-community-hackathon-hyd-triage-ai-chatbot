@@ -339,7 +339,11 @@ def _build_ai_context(
     db_path: str | None,
     user_id: str | None,
 ) -> Dict[str, Any]:
-    history_summary = (patient_history_context or {}).get("generated_summary", "").strip()
+    generated_summary = (patient_history_context or {}).get("generated_summary")
+    if isinstance(generated_summary, dict):
+        history_summary = str(generated_summary.get("summary", "")).strip()
+    else:
+        history_summary = str(generated_summary or "").strip()
     if not history_summary and db_path and user_id:
         history_summary = build_history_summary(db_path, user_id, session["history"])
 

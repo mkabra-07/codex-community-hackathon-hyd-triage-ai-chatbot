@@ -34,6 +34,10 @@ body {
   min-height: 100vh;
 }
 
+body.modal-open {
+  overflow: hidden;
+}
+
 .page-shell,
 .auth-shell {
   min-height: 100vh;
@@ -131,12 +135,6 @@ body {
 .history-session-card:active {
   transform: translateY(0);
   background: rgba(214, 247, 193, 0.42);
-}
-
-.history-session-card.active {
-  border-color: rgba(15, 118, 110, 0.34);
-  background: linear-gradient(180deg, rgba(214, 247, 193, 0.62), rgba(255, 255, 255, 0.96));
-  box-shadow: 0 16px 36px rgba(15, 118, 110, 0.12);
 }
 
 .history-session-icon {
@@ -265,6 +263,21 @@ body {
   cursor: pointer;
 }
 
+.ghost-button:hover {
+  border-color: rgba(15, 118, 110, 0.24);
+  color: var(--accent-dark);
+}
+
+.danger-button {
+  border: 0;
+  border-radius: 14px;
+  padding: 10px 16px;
+  font-weight: 700;
+  color: white;
+  background: linear-gradient(135deg, #d92d20, #b42318);
+  cursor: pointer;
+}
+
 .disclaimer-banner,
 .sample-card,
 .profile-summary,
@@ -278,6 +291,32 @@ body {
   background: rgba(180, 35, 24, 0.08);
   color: var(--danger);
   font-weight: 600;
+}
+
+.session-status-banner {
+  margin: 16px 24px 0;
+  padding: 12px 16px;
+  border-radius: 16px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.session-status-banner[data-tone="info"] {
+  background: rgba(15, 118, 110, 0.1);
+  color: var(--accent-dark);
+  border-color: rgba(15, 118, 110, 0.14);
+}
+
+.session-status-banner[data-tone="warning"] {
+  background: rgba(181, 71, 8, 0.1);
+  color: var(--urgent);
+  border-color: rgba(181, 71, 8, 0.14);
+}
+
+.session-status-banner[data-tone="error"] {
+  background: rgba(180, 35, 24, 0.1);
+  color: var(--danger);
+  border-color: rgba(180, 35, 24, 0.14);
 }
 
 .sample-card,
@@ -608,6 +647,97 @@ button {
   animation-delay: 0.3s;
 }
 
+.session-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(24, 49, 42, 0.35);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  z-index: 40;
+}
+
+.session-modal-backdrop[hidden] {
+  display: none !important;
+}
+
+.session-modal {
+  width: min(440px, 100%);
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid rgba(24, 49, 42, 0.08);
+  border-radius: 24px;
+  padding: 24px;
+  box-shadow: 0 28px 80px rgba(19, 44, 36, 0.18);
+}
+
+.session-modal h2 {
+  margin: 0;
+}
+
+.session-modal p {
+  margin: 10px 0 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.session-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.session-modal-preview {
+  width: min(760px, 100%);
+  max-height: min(84vh, 820px);
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 18px;
+}
+
+.session-preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.session-preview-meta {
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+
+.session-preview-body {
+  overflow-y: auto;
+  display: grid;
+  gap: 12px;
+  padding-right: 4px;
+}
+
+.session-preview-message {
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px solid rgba(24, 49, 42, 0.08);
+}
+
+.session-preview-message-user {
+  background: rgba(214, 247, 193, 0.5);
+}
+
+.session-preview-message-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-transform: capitalize;
+}
+
+.session-preview-message-text {
+  margin: 8px 0 0;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
 @keyframes bounce {
   0%,
   80%,
@@ -658,6 +788,11 @@ button {
   .composer,
   .flow-meta {
     grid-template-columns: 1fr;
+  }
+
+  .session-preview-header {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .bubble {
