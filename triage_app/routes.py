@@ -22,14 +22,9 @@ from .database import (
     persist_message,
     update_user_profile,
 )
-from .openai_service import create_openai_client, extract_triage_assessment
+from .openai_service import create_openai_client
 from .session_store import append_message, get_session
-from .triage_engine import (
-    build_assistant_reply,
-    build_emergency_response,
-    detect_emergency_signals,
-    merge_assessment_into_profile,
-)
+from .chat_flow import build_initial_prompt, handle_chat
 
 
 def register_routes(app: Flask) -> None:
@@ -115,11 +110,15 @@ def register_routes(app: Flask) -> None:
     @login_required
     def chat_page():
         user = g.user
+        session_key = f"{user['id']}:default"
+        session_profile = _profile_payload(user)
+        session_state = get_session(session_key, base_profile=session_profile)
         return render_template(
             "chat.html",
             user=user,
             missing_fields=missing_profile_fields(user),
             profile=_profile_payload(user),
+            initial_chat_state=build_initial_prompt(session_state),
         )
 
     @app.post("/profile")
@@ -181,28 +180,14 @@ def register_routes(app: Flask) -> None:
         append_message(session_key, "user", message)
         _persist_message(user["id"], session_id, "user", message)
 
-        emergency = detect_emergency_signals(message)
-        if emergency["is_emergency"]:
-            response_payload = build_emergency_response(session_key, emergency["matches"])
-            _persist_message(
-                user["id"],
-                session_id,
-                "assistant",
-                response_payload["reply"],
-                response_payload["assessment"],
-            )
-            return jsonify(_camelize_payload(response_payload))
-
         try:
-            assessment = extract_triage_assessment(
-                client=openai_client,
+            response_payload = handle_chat(
+                user_input=message,
+                session_key=session_key,
+                session=session_state,
+                openai_client=openai_client,
                 model=app.config["OPENAI_MODEL"],
-                history=session_state["history"],
-                profile=session_state["profile"],
-                latest_message=message,
             )
-            profile = merge_assessment_into_profile(session_key, assessment)
-            response_payload = build_assistant_reply(session_key, assessment, profile)
             _persist_message(
                 user["id"],
                 session_id,
@@ -218,19 +203,21 @@ def register_routes(app: Flask) -> None:
                 "If symptoms are severe or worsening, seek urgent care immediately."
             )
             fallback_assessment = {
-                "symptoms": [],
                 "risk_level": "URGENT",
                 "reasoning": "The system could not complete the assessment safely.",
+                "summary": fallback_reply,
                 "next_steps": ["Contact a clinician for further assessment."],
             }
-            append_message(session_key, "assistant", fallback_reply, {"risk_level": "URGENT"})
+            append_message(session_key, "assistant", fallback_reply, {"stage": "TRIAGE_RESULT", "risk_level": "URGENT"})
             _persist_message(user["id"], session_id, "assistant", fallback_reply, fallback_assessment)
             return (
                 jsonify(
                     {
                         "reply": fallback_reply,
                         "assessment": fallback_assessment,
-                        "followUpQuestions": [],
+                        "stage": "TRIAGE_RESULT",
+                        "progressLabel": "Final step: Triage result",
+                        "debug": session_state["triage"],
                     }
                 ),
                 500,
@@ -255,7 +242,9 @@ def _camelize_payload(payload):
     return {
         "reply": payload["reply"],
         "assessment": payload["assessment"],
-        "followUpQuestions": payload.get("follow_up_questions", []),
+        "stage": payload.get("stage"),
+        "progressLabel": payload.get("progressLabel"),
+        "debug": payload.get("debug"),
     }
 
 

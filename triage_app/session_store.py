@@ -1,6 +1,15 @@
 from copy import deepcopy
 from datetime import datetime, timezone
+from enum import StrEnum
 from typing import Dict
+
+
+class Stage(StrEnum):
+    SYMPTOM_COLLECTION = "SYMPTOM_COLLECTION"
+    DURATION_COLLECTION = "DURATION_COLLECTION"
+    SEVERITY_COLLECTION = "SEVERITY_COLLECTION"
+    FOLLOW_UPS = "FOLLOW_UPS"
+    TRIAGE_RESULT = "TRIAGE_RESULT"
 
 
 _SESSIONS = {}
@@ -8,14 +17,26 @@ _SESSIONS = {}
 
 def _empty_profile() -> Dict[str, object]:
     return {
-        "symptoms": [],
-        "duration": "",
-        "severity": "",
         "age": "",
         "gender": "",
         "height": "",
         "weight": "",
         "existing_conditions": "",
+    }
+
+
+def _empty_triage_state() -> Dict[str, object]:
+    return {
+        "stage": Stage.SYMPTOM_COLLECTION,
+        "symptoms": [],
+        "duration": None,
+        "duration_value_hours": None,
+        "severity": None,
+        "additional_answers": {},
+        "pending_follow_ups": [],
+        "completed_follow_ups": [],
+        "history_summary": [],
+        "last_result": None,
     }
 
 
@@ -26,6 +47,7 @@ def get_session(session_key: str, base_profile=None) -> dict:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "profile": _empty_profile(),
             "history": [],
+            "triage": _empty_triage_state(),
         }
 
     session = _SESSIONS[session_key]
@@ -56,22 +78,30 @@ def update_profile(session_key: str, updates=None) -> dict:
     next_profile = deepcopy(session["profile"])
 
     for key, value in updates.items():
-        if key == "symptoms":
-            continue
         if value is not None and str(value).strip():
             next_profile[key] = value
 
-    next_profile["symptoms"] = _dedupe(
-        session["profile"].get("symptoms", []) + updates.get("symptoms", [])
-    )
     session["profile"] = next_profile
     return next_profile
 
 
-def _dedupe(values):
-    seen = []
-    for value in values:
-        cleaned = str(value).strip()
-        if cleaned and cleaned not in seen:
-            seen.append(cleaned)
-    return seen
+def get_triage_state(session_key: str) -> dict:
+    return get_session(session_key)["triage"]
+
+
+def update_triage_state(session_key: str, updates=None) -> dict:
+    session = get_session(session_key)
+    triage = deepcopy(session["triage"])
+    updates = updates or {}
+
+    for key, value in updates.items():
+        triage[key] = value
+
+    session["triage"] = triage
+    return triage
+
+
+def reset_triage_state(session_key: str) -> dict:
+    session = get_session(session_key)
+    session["triage"] = _empty_triage_state()
+    return session["triage"]

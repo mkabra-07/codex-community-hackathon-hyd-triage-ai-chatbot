@@ -83,6 +83,16 @@
       {% endif %}
 
       <section class="messages" id="messages" aria-live="polite"></section>
+      <section class="flow-meta">
+        <div class="progress-card">
+          <p class="progress-label" id="progressLabel">{{ initial_chat_state.progressLabel }}</p>
+          <p class="progress-copy">The bot will collect symptoms, duration, severity, and follow-up details before any triage result is shown.</p>
+        </div>
+        <div class="debug-card">
+          <p class="debug-title">Debug mode</p>
+          <pre id="debugPanel">{{ initial_chat_state.debug|tojson(indent=2) }}</pre>
+        </div>
+      </section>
 
       <p class="error-text" id="errorText" hidden></p>
 
@@ -103,11 +113,14 @@
   <script>
     const currentUser = {{ profile|tojson }};
     const needsProfileCompletion = {{ 'true' if missing_fields else 'false' }};
+    const initialChatState = {{ initial_chat_state|tojson }};
     const initialMessage = {
       role: "assistant",
       text: needsProfileCompletion
         ? "This is not medical advice. Before we continue, please complete your saved profile so I don't keep asking the same personal questions."
-        : "This is not medical advice. I can help assess how urgent your symptoms may be and suggest next steps using your saved profile. Please describe what you're feeling in your own words."
+        : initialChatState.reply,
+      assessment: needsProfileCompletion ? null : initialChatState.assessment,
+      stage: initialChatState.stage
     };
 
     const messagesEl = document.getElementById("messages");
@@ -117,6 +130,8 @@
     const sendButtonEl = document.getElementById("sendButton");
     const saveProfileButtonEl = document.getElementById("saveProfileButton");
     const profileStatusEl = document.getElementById("profileStatus");
+    const progressLabelEl = document.getElementById("progressLabel");
+    const debugPanelEl = document.getElementById("debugPanel");
 
     let profileComplete = !needsProfileCompletion;
     let sessionId = localStorage.getItem(`triage-session-id-{{ user.id }}`);
@@ -126,6 +141,9 @@
     }
 
     renderMessage(initialMessage);
+    if (!needsProfileCompletion) {
+      updateFlowMeta(initialChatState);
+    }
 
     if (!profileComplete) {
       inputEl.disabled = true;
@@ -162,8 +180,10 @@
         renderMessage({
           role: "assistant",
           text: payload.reply,
-          assessment: payload.assessment
+          assessment: payload.assessment,
+          stage: payload.stage
         });
+        updateFlowMeta(payload);
       } catch (error) {
         typingNode.remove();
         errorEl.hidden = false;
@@ -213,7 +233,7 @@
       });
     }
 
-    function renderMessage(message) {
+      function renderMessage(message) {
       const row = document.createElement("article");
       row.className = `bubble-row ${message.role === "user" ? "bubble-row-user" : ""}`;
 
@@ -224,17 +244,24 @@
       text.textContent = message.text;
       bubble.appendChild(text);
 
-      if (message.assessment) {
-        const assessmentCard = document.createElement("div");
-        assessmentCard.className = "assessment-card";
+        if (message.assessment && message.stage === "TRIAGE_RESULT") {
+          const assessmentCard = document.createElement("div");
+          assessmentCard.className = "assessment-card";
 
-        const badge = document.createElement("span");
+          const badge = document.createElement("span");
         badge.className = `risk-badge risk-${message.assessment.risk_level.toLowerCase()}`;
-        badge.textContent = message.assessment.risk_level;
-        assessmentCard.appendChild(badge);
+          badge.textContent = message.assessment.risk_level;
+          assessmentCard.appendChild(badge);
 
-        const reasoning = document.createElement("p");
-        reasoning.className = "assessment-reason";
+          if (typeof message.assessment.score !== "undefined") {
+            const score = document.createElement("p");
+            score.className = "assessment-score";
+            score.textContent = `Risk score: ${message.assessment.score}`;
+            assessmentCard.appendChild(score);
+          }
+
+          const reasoning = document.createElement("p");
+          reasoning.className = "assessment-reason";
         reasoning.textContent = message.assessment.reasoning;
         assessmentCard.appendChild(reasoning);
 
@@ -275,6 +302,11 @@
       inputEl.disabled = isLoading || !profileComplete;
       sendButtonEl.disabled = isLoading || !profileComplete;
       sendButtonEl.textContent = isLoading ? "Sending..." : "Send";
+    }
+
+    function updateFlowMeta(payload) {
+      progressLabelEl.textContent = payload.progressLabel || "Step in progress";
+      debugPanelEl.textContent = JSON.stringify(payload.debug || {}, null, 2);
     }
   </script>
 {% endblock %}
