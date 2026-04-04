@@ -4,116 +4,136 @@
 
 {% block body %}
   <main class="page-shell">
-    <section class="chat-card">
-      <header class="chat-header">
-        <div>
-          <p class="eyebrow">AI-Powered Triage</p>
-          <h1>Healthcare Chatbot MVP</h1>
-          <p class="logged-in-as">Logged in as {{ user.name }}</p>
-        </div>
-        <div class="header-actions">
-          <div class="status-pill">Safety first</div>
-          <form method="post" action="{{ url_for('logout') }}">
-            <button type="submit" class="ghost-button">Logout</button>
-          </form>
-        </div>
-      </header>
-
-      <div class="disclaimer-banner">
-        This is not medical advice. In an emergency, contact local emergency services immediately.
-      </div>
-
-      <section class="profile-summary">
-        <div>
-          <h2>Patient profile</h2>
-          <p>
-            Age: {{ user.age if user.age is not none else "Missing" }} |
-            Gender: {{ user.gender or "Missing" }} |
-            Height: {{ user.height if user.height is not none else "Missing" }} cm |
-            Weight: {{ user.weight if user.weight is not none else "Missing" }} kg
-          </p>
-          <p>Conditions: {{ user.existing_conditions|join(', ') if user.existing_conditions else "None recorded" }}</p>
-        </div>
-        {% if missing_fields %}
-          <span class="profile-warning">Complete your profile to avoid repeat questions</span>
-        {% endif %}
-      </section>
-
-      {% if missing_fields %}
-        <section class="profile-panel">
-          <h3>Complete your profile</h3>
-          <p class="profile-panel-copy">We will save these details and reuse them in future triage chats.</p>
-          <div class="profile-grid">
-            <label>
-              Age
-              <input id="profileAge" type="number" min="0" value="{{ user.age if user.age is not none else '' }}" />
-            </label>
-            <label>
-              Gender
-              <select id="profileGender">
-                <option value="" {% if not user.gender %}selected{% endif %}>Prefer not to say</option>
-                <option value="female" {% if user.gender == 'female' %}selected{% endif %}>Female</option>
-                <option value="male" {% if user.gender == 'male' %}selected{% endif %}>Male</option>
-                <option value="non-binary" {% if user.gender == 'non-binary' %}selected{% endif %}>Non-binary</option>
-              </select>
-            </label>
-            <label>
-              Height (cm)
-              <input id="profileHeight" type="number" min="0" step="0.1" value="{{ user.height if user.height is not none else '' }}" />
-            </label>
-            <label>
-              Weight (kg)
-              <input id="profileWeight" type="number" min="0" step="0.1" value="{{ user.weight if user.weight is not none else '' }}" />
-            </label>
+    <div class="chat-layout">
+      <aside class="history-sidebar">
+        <div class="history-sidebar-inner">
+          <div class="sidebar-header">
+            <p class="eyebrow">Patient History</p>
+            <h2>Previous chats</h2>
+            <p class="sidebar-copy">Review earlier sessions with timestamps and messages.</p>
           </div>
-          <label class="conditions-field">
-            Existing conditions
-            <input
-              id="profileConditions"
-              type="text"
-              placeholder="e.g. asthma, diabetes"
-              value="{{ (user.existing_conditions or [])|join(', ') }}"
-            />
-          </label>
-          <div class="profile-actions">
-            <button type="button" id="saveProfileButton">Save profile</button>
-            <p id="profileStatus" class="profile-status"></p>
+          <div id="historyTimeline" class="history-timeline"></div>
+        </div>
+      </aside>
+
+      <section class="chat-card">
+        <header class="chat-header">
+          <div>
+            <p class="eyebrow">AI-Powered Triage</p>
+            <h1>Healthcare Chatbot MVP</h1>
+            <p class="logged-in-as">Logged in as {{ user.name }}</p>
+          </div>
+          <div class="header-actions">
+            <div class="status-pill">Safety first</div>
+            <form method="post" action="{{ url_for('logout') }}">
+              <button type="submit" class="ghost-button">Logout</button>
+            </form>
+          </div>
+        </header>
+
+        <div class="disclaimer-banner">
+          This is not medical advice. In an emergency, contact local emergency services immediately.
+        </div>
+
+        <section class="profile-summary">
+          <div>
+            <h2>Patient profile</h2>
+            <p>
+              Age: {{ user.age if user.age is not none else "Missing" }} |
+              Gender: {{ user.gender or "Missing" }} |
+              Height: {{ user.height if user.height is not none else "Missing" }} cm |
+              Weight: {{ user.weight if user.weight is not none else "Missing" }} kg
+            </p>
+            <p>Conditions: {{ user.existing_conditions|join(', ') if user.existing_conditions else "None recorded" }}</p>
+          </div>
+          {% if missing_fields %}
+            <span class="profile-warning">Complete your profile to avoid repeat questions</span>
+          {% endif %}
+        </section>
+
+        {% if missing_fields %}
+          <section class="profile-panel">
+            <h3>Complete your profile</h3>
+            <p class="profile-panel-copy">We will save these details and reuse them in future triage chats.</p>
+            <div class="profile-grid">
+              <label>
+                Age
+                <input id="profileAge" type="number" min="0" value="{{ user.age if user.age is not none else '' }}" />
+              </label>
+              <label>
+                Gender
+                <select id="profileGender">
+                  <option value="" {% if not user.gender %}selected{% endif %}>Prefer not to say</option>
+                  <option value="female" {% if user.gender == 'female' %}selected{% endif %}>Female</option>
+                  <option value="male" {% if user.gender == 'male' %}selected{% endif %}>Male</option>
+                  <option value="non-binary" {% if user.gender == 'non-binary' %}selected{% endif %}>Non-binary</option>
+                </select>
+              </label>
+              <label>
+                Height (cm)
+                <input id="profileHeight" type="number" min="0" step="0.1" value="{{ user.height if user.height is not none else '' }}" />
+              </label>
+              <label>
+                Weight (kg)
+                <input id="profileWeight" type="number" min="0" step="0.1" value="{{ user.weight if user.weight is not none else '' }}" />
+              </label>
+            </div>
+            <label class="conditions-field">
+              Existing conditions
+              <input
+                id="profileConditions"
+                type="text"
+                placeholder="e.g. asthma, diabetes"
+                value="{{ (user.existing_conditions or [])|join(', ') }}"
+              />
+            </label>
+            <div class="profile-actions">
+              <button type="button" id="saveProfileButton">Save profile</button>
+              <p id="profileStatus" class="profile-status"></p>
+            </div>
+          </section>
+        {% endif %}
+
+        <section class="messages" id="messages" aria-live="polite"></section>
+        <section class="flow-meta">
+          <div class="progress-card">
+            <p class="progress-label" id="progressLabel">{{ initial_chat_state.progressLabel }}</p>
+            <p class="progress-copy">The bot will collect symptoms, duration, severity, and follow-up details before any triage result is shown.</p>
+          </div>
+          <div class="debug-card">
+            <div class="debug-header">
+              <p class="debug-title">Debug mode</p>
+              <div class="debug-toggle">
+                <button type="button" class="debug-tab active" data-debug-view="summary">Summary</button>
+                <button type="button" class="debug-tab" data-debug-view="history">Sessions</button>
+              </div>
+            </div>
+            <pre id="debugPanel">{{ initial_chat_state.debug|tojson(indent=2) }}</pre>
           </div>
         </section>
-      {% endif %}
 
-      <section class="messages" id="messages" aria-live="polite"></section>
-      <section class="flow-meta">
-        <div class="progress-card">
-          <p class="progress-label" id="progressLabel">{{ initial_chat_state.progressLabel }}</p>
-          <p class="progress-copy">The bot will collect symptoms, duration, severity, and follow-up details before any triage result is shown.</p>
-        </div>
-        <div class="debug-card">
-          <p class="debug-title">Debug mode</p>
-          <pre id="debugPanel">{{ initial_chat_state.debug|tojson(indent=2) }}</pre>
-        </div>
+        <p class="error-text" id="errorText" hidden></p>
+
+        <form class="composer" id="chatForm">
+          <input
+            id="messageInput"
+            type="text"
+            name="message"
+            placeholder="Describe your symptoms..."
+            autocomplete="off"
+            required
+          />
+          <button type="submit" id="sendButton">Send</button>
+        </form>
       </section>
-
-      <p class="error-text" id="errorText" hidden></p>
-
-      <form class="composer" id="chatForm">
-        <input
-          id="messageInput"
-          type="text"
-          name="message"
-          placeholder="Describe your symptoms..."
-          autocomplete="off"
-          required
-        />
-        <button type="submit" id="sendButton">Send</button>
-      </form>
-    </section>
+    </div>
   </main>
 
   <script>
     const currentUser = {{ profile|tojson }};
     const needsProfileCompletion = {{ 'true' if missing_fields else 'false' }};
     const initialChatState = {{ initial_chat_state|tojson }};
+    const initialHistoryContext = {{ initial_history_context|tojson }};
     const initialMessage = {
       role: "assistant",
       text: needsProfileCompletion
@@ -132,8 +152,12 @@
     const profileStatusEl = document.getElementById("profileStatus");
     const progressLabelEl = document.getElementById("progressLabel");
     const debugPanelEl = document.getElementById("debugPanel");
+    const debugTabEls = Array.from(document.querySelectorAll(".debug-tab"));
+    const historyTimelineEl = document.getElementById("historyTimeline");
 
     let profileComplete = !needsProfileCompletion;
+    let debugView = "summary";
+    let lastFlowPayload = initialChatState;
     let sessionId = localStorage.getItem(`triage-session-id-{{ user.id }}`);
     if (!sessionId) {
       sessionId = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : `session-${Date.now()}`;
@@ -144,6 +168,15 @@
     if (!needsProfileCompletion) {
       updateFlowMeta(initialChatState);
     }
+    renderHistoryTimeline(initialHistoryContext.session_timeline || []);
+
+    debugTabEls.forEach((button) => {
+      button.addEventListener("click", () => {
+        debugView = button.dataset.debugView;
+        debugTabEls.forEach((tab) => tab.classList.toggle("active", tab === button));
+        updateFlowMeta(lastFlowPayload);
+      });
+    });
 
     if (!profileComplete) {
       inputEl.disabled = true;
@@ -183,7 +216,9 @@
           assessment: payload.assessment,
           stage: payload.stage
         });
+        lastFlowPayload = payload;
         updateFlowMeta(payload);
+        refreshHistoryTimeline();
       } catch (error) {
         typingNode.remove();
         errorEl.hidden = false;
@@ -306,7 +341,88 @@
 
     function updateFlowMeta(payload) {
       progressLabelEl.textContent = payload.progressLabel || "Step in progress";
-      debugPanelEl.textContent = JSON.stringify(payload.debug || {}, null, 2);
+      const debugPayload = payload.debug || {};
+      const shown = debugView === "history"
+        ? {
+            session_timeline: debugPayload.session_timeline || [],
+            raw_history: debugPayload.raw_history || []
+          }
+        : {
+            stage: debugPayload.stage,
+            symptoms: debugPayload.symptoms,
+            duration: debugPayload.duration,
+            severity: debugPayload.severity,
+            additional_answers: debugPayload.additional_answers,
+            pending_follow_ups: debugPayload.pending_follow_ups,
+            last_result: debugPayload.last_result,
+            history_cached: debugPayload.history_cached,
+            history_summary: debugPayload.history_summary
+          };
+      debugPanelEl.textContent = JSON.stringify(shown, null, 2);
+    }
+
+    async function refreshHistoryTimeline() {
+      try {
+        const response = await fetch("/history");
+        if (!response.ok) {
+          return;
+        }
+        const payload = await response.json();
+        renderHistoryTimeline(payload.sessionTimeline || []);
+      } catch (_error) {
+      }
+    }
+
+    function renderHistoryTimeline(sessions) {
+      if (!sessions.length) {
+        historyTimelineEl.innerHTML = '<p class="history-empty">No previous chats yet.</p>';
+        return;
+      }
+
+      historyTimelineEl.innerHTML = "";
+      sessions
+        .slice()
+        .reverse()
+        .forEach((session) => {
+          const details = document.createElement("details");
+          details.className = "history-session";
+
+          const summary = document.createElement("summary");
+          summary.className = "history-session-summary";
+          summary.innerHTML = `
+            <div>
+              <strong>Session ${session.session_id.slice(0, 8)}</strong>
+              <p>${formatDate(session.started_at)} to ${formatDate(session.ended_at)}</p>
+            </div>
+            <span>${session.message_count} messages</span>
+          `;
+          details.appendChild(summary);
+
+          const messages = document.createElement("div");
+          messages.className = "history-session-messages";
+
+          session.messages.forEach((message) => {
+            const item = document.createElement("article");
+            item.className = "history-message";
+            item.innerHTML = `
+              <p class="history-message-meta">${message.role} • ${formatDate(message.created_at)}</p>
+              <p class="history-message-text"></p>
+            `;
+            item.querySelector(".history-message-text").textContent = message.message;
+            messages.appendChild(item);
+          });
+
+          details.appendChild(messages);
+          historyTimelineEl.appendChild(details);
+        });
+    }
+
+    function formatDate(value) {
+      const date = new Date(value.replace(" ", "T"));
+      if (Number.isNaN(date.getTime())) {
+        return value;
+      }
+      return date.toLocaleString();
     }
   </script>
 {% endblock %}

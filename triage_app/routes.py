@@ -22,6 +22,7 @@ from .database import (
     persist_message,
     update_user_profile,
 )
+from .history_summary import summarize_patient_history
 from .openai_service import create_openai_client
 from .session_store import append_message, get_session
 from .chat_flow import build_initial_prompt, handle_chat
@@ -113,12 +114,20 @@ def register_routes(app: Flask) -> None:
         session_key = f"{user['id']}:default"
         session_profile = _profile_payload(user)
         session_state = get_session(session_key, base_profile=session_profile)
+        history_context = summarize_patient_history(
+            user_id=user["id"],
+            db_path=app.config["SQLITE_PATH"],
+            client=openai_client,
+            model=app.config["OPENAI_MODEL"],
+            limit=50,
+        )
         return render_template(
             "chat.html",
             user=user,
             missing_fields=missing_profile_fields(user),
             profile=_profile_payload(user),
-            initial_chat_state=build_initial_prompt(session_state),
+            initial_chat_state=build_initial_prompt(session_state, history_context),
+            initial_history_context=history_context,
         )
 
     @app.post("/profile")
@@ -162,6 +171,24 @@ def register_routes(app: Flask) -> None:
             }
         )
 
+    @app.get("/history")
+    @login_required
+    def history():
+        history_context = summarize_patient_history(
+            user_id=g.user["id"],
+            db_path=app.config["SQLITE_PATH"],
+            client=openai_client,
+            model=app.config["OPENAI_MODEL"],
+            limit=50,
+        )
+        return jsonify(
+            {
+                "sessionTimeline": history_context.get("session_timeline", []),
+                "summary": history_context.get("generated_summary", {}),
+                "cached": history_context.get("cached", False),
+            }
+        )
+
     @app.post("/chat")
     @login_required
     def chat():
@@ -179,6 +206,13 @@ def register_routes(app: Flask) -> None:
 
         append_message(session_key, "user", message)
         _persist_message(user["id"], session_id, "user", message)
+        history_context = summarize_patient_history(
+            user_id=user["id"],
+            db_path=app.config["SQLITE_PATH"],
+            client=openai_client,
+            model=app.config["OPENAI_MODEL"],
+            limit=50,
+        )
 
         try:
             response_payload = handle_chat(
@@ -187,7 +221,11 @@ def register_routes(app: Flask) -> None:
                 session=session_state,
                 openai_client=openai_client,
                 model=app.config["OPENAI_MODEL"],
+                patient_history_context=history_context,
+                db_path=app.config["SQLITE_PATH"],
+                user_id=user["id"],
             )
+            _sync_session_profile_to_user(user["id"], session_state["profile"])
             _persist_message(
                 user["id"],
                 session_id,
@@ -217,7 +255,11 @@ def register_routes(app: Flask) -> None:
                         "assessment": fallback_assessment,
                         "stage": "TRIAGE_RESULT",
                         "progressLabel": "Final step: Triage result",
-                        "debug": session_state["triage"],
+                        "debug": {
+                            **session_state["triage"],
+                            "history_summary": history_context.get("generated_summary"),
+                            "raw_history": history_context.get("raw_history"),
+                        },
                     }
                 ),
                 500,
@@ -290,3 +332,17 @@ def _profile_payload(user: Dict[str, object]) -> Dict[str, object]:
         "weight": user.get("weight") if user.get("weight") is not None else "",
         "existing_conditions": ", ".join(user.get("existing_conditions") or []),
     }
+
+
+def _sync_session_profile_to_user(user_id: str, profile: Dict[str, object]) -> None:
+    age = profile.get("age")
+    existing_conditions = _conditions_list(profile.get("existing_conditions"))
+    if age in ("", None) and not existing_conditions:
+        return
+
+    update_user_profile(
+        current_app.config["SQLITE_PATH"],
+        user_id,
+        age=int(age) if age not in ("", None) else None,
+        existing_conditions=existing_conditions if existing_conditions else None,
+    )

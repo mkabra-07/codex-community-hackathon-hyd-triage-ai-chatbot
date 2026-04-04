@@ -1,24 +1,55 @@
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from openai import OpenAI
 
 
 TRIAGE_SYSTEM_PROMPT = """
-You are a structured medical triage assistant.
+You are a healthcare triage assistant.
+
+Patient Profile:
+Age: X
+Conditions: X
+
+Patient History Summary:
+...
+
+Current Symptoms:
+...
+
+Instructions:
+- Do not repeat known questions
+- Focus on new symptoms
+- Be concise and safe
 
 RULES:
 - Do not classify the case yourself.
 - The risk level and score are already determined by a deterministic rules engine.
 - Use the provided risk level and rule hits to write a clear explanation and practical next steps.
 - Do not diagnose.
-- Be concise, cautious, and patient-friendly.
+- Return valid JSON only.
 
 Return valid JSON only with this exact shape:
 {
   "reasoning": "string",
   "summary": "string",
   "next_steps": ["string"]
+}
+""".strip()
+
+SYMPTOM_NORMALIZATION_PROMPT = """
+You classify whether user text describes a medical symptom.
+
+Rules:
+- Only mark valid if the input clearly describes a physical symptom or complaint.
+- Normalize to short standard symptom labels.
+- Support multi-word symptoms such as joint pain, abdominal pain, chest pain, breathing difficulty.
+- If it is not a medical symptom, return valid false.
+
+Return valid JSON only in this exact shape:
+{
+  "valid": true,
+  "normalized": ["joint pain"]
 }
 """.strip()
 
@@ -29,20 +60,40 @@ def create_openai_client(api_key: str):
     return OpenAI(api_key=api_key)
 
 
+def normalize_symptom_with_llm(client, model: str, text: str) -> Dict[str, Any]:
+    if client is None:
+        return {"valid": False, "normalized": []}
+
+    response = client.chat.completions.create(
+        model=model,
+        response_format={"type": "json_object"},
+        temperature=0,
+        messages=[
+            {"role": "system", "content": SYMPTOM_NORMALIZATION_PROMPT},
+            {"role": "user", "content": f"Input: {text}"},
+        ],
+    )
+
+    raw_content = response.choices[0].message.content or "{}"
+    parsed = json.loads(raw_content)
+    normalized = parsed.get("normalized", []) or []
+    if isinstance(normalized, str):
+        normalized = [normalized]
+
+    return {
+        "valid": bool(parsed.get("valid")),
+        "normalized": [str(item).strip().lower() for item in normalized if str(item).strip()],
+    }
+
+
 def generate_triage_explanation(
     client,
     model: str,
-    profile: Dict[str, Any],
-    triage_state: Dict[str, Any],
-    history: List[Dict[str, Any]],
+    context: Dict[str, Any],
     rules_result: Dict[str, Any],
 ) -> Dict[str, Any]:
     if client is None:
-        return build_fallback_explanation(profile, triage_state, rules_result)
-
-    conversation_text = "\n".join(
-        f"{entry['role']}: {entry['content']}" for entry in history[-12:]
-    )
+        return build_fallback_explanation(context, rules_result)
 
     response = client.chat.completions.create(
         model=model,
@@ -57,16 +108,13 @@ def generate_triage_explanation(
                     f"Risk level: {rules_result['risk_level']}\n"
                     f"Score: {rules_result['score']}\n"
                     f"Rule hits: {json.dumps(rules_result['rule_hits'])}\n\n"
-                    "Patient profile:\n"
-                    f"Age: {profile.get('age', 'unknown')}\n"
-                    f"Gender: {profile.get('gender', 'unknown')}\n"
-                    f"Height: {profile.get('height', 'unknown')}\n"
-                    f"Weight: {profile.get('weight', 'unknown')}\n"
-                    f"Conditions: {profile.get('existing_conditions', 'unknown')}\n\n"
-                    "Collected triage data:\n"
-                    f"{json.dumps(triage_state, indent=2, default=str)}\n\n"
-                    "Conversation summary:\n"
-                    f"{conversation_text}"
+                    "Patient Profile:\n"
+                    f"Age: {context['profile'].get('age', 'unknown')}\n"
+                    f"Conditions: {context['profile'].get('conditions', 'unknown')}\n\n"
+                    "Patient History Summary:\n"
+                    f"{context.get('history_summary', 'No relevant prior history available.')}\n\n"
+                    "Current Symptoms:\n"
+                    f"{context.get('current_message', '')}"
                 ),
             },
         ],
@@ -87,13 +135,11 @@ def generate_triage_explanation(
     }
 
 
-def build_fallback_explanation(
-    profile: Dict[str, Any], triage_state: Dict[str, Any], rules_result: Dict[str, Any]
-) -> Dict[str, Any]:
+def build_fallback_explanation(context: Dict[str, Any], rules_result: Dict[str, Any]) -> Dict[str, Any]:
     risk_level = rules_result["risk_level"]
     score = rules_result["score"]
     hits = ", ".join(rules_result["rule_hits"]) or "collected symptom details"
-    symptoms = ", ".join(triage_state.get("symptoms", [])) or "your symptoms"
+    symptoms = context.get("current_message") or "your symptoms"
 
     if risk_level == "EMERGENCY":
         summary = (

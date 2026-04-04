@@ -2,7 +2,7 @@ from typing import Dict, List
 
 
 CRITICAL_SYMPTOMS = {"chest pain", "breathing difficulty", "seizure"}
-MODERATE_SYMPTOMS = {"fever", "headache", "vomiting"}
+MODERATE_SYMPTOMS = {"fever", "headache", "vomiting", "joint pain", "abdominal pain", "back pain"}
 MINOR_SYMPTOMS = {"cold", "cough", "fatigue"}
 
 

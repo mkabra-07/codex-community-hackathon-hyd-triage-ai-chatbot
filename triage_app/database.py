@@ -78,6 +78,17 @@ def initialize_database(db_path: str) -> None:
             )
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS history_summaries (
+                user_id TEXT PRIMARY KEY,
+                last_message_id INTEGER NOT NULL,
+                summary_json TEXT NOT NULL,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+            """
+        )
         connection.commit()
 
     seed_users(db_path)
@@ -229,6 +240,71 @@ def persist_message(
             VALUES (?, ?, ?, ?, ?)
             """,
             (user_id, session_id, role, message, json.dumps(metadata) if metadata else None),
+        )
+        connection.commit()
+
+
+def fetch_recent_conversations(db_path: str, user_id: str, limit: int = 30) -> List[Dict[str, Any]]:
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT id, session_id, role, message, metadata, created_at
+            FROM conversations
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (user_id, limit),
+        ).fetchall()
+
+    conversations = [dict(row) for row in reversed(rows)]
+    for item in conversations:
+        item["metadata"] = json.loads(item["metadata"]) if item.get("metadata") else None
+    return conversations
+
+
+def get_latest_conversation_id(db_path: str, user_id: str) -> int:
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            "SELECT MAX(id) AS latest_id FROM conversations WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        return int(row["latest_id"] or 0)
+
+
+def get_cached_history_summary(db_path: str, user_id: str) -> Optional[Dict[str, Any]]:
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            "SELECT user_id, last_message_id, summary_json, updated_at FROM history_summaries WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "user_id": row["user_id"],
+        "last_message_id": row["last_message_id"],
+        "summary": json.loads(row["summary_json"]),
+        "updated_at": row["updated_at"],
+    }
+
+
+def upsert_history_summary(db_path: str, user_id: str, last_message_id: int, summary: Dict[str, Any]) -> None:
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO history_summaries (user_id, last_message_id, summary_json, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id) DO UPDATE SET
+                last_message_id = excluded.last_message_id,
+                summary_json = excluded.summary_json,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (user_id, last_message_id, json.dumps(summary)),
         )
         connection.commit()
 
