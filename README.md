@@ -2,6 +2,8 @@
 
 This repo is now a Python-first Flask implementation of the healthcare triage chatbot MVP. It serves the chat UI, handles the triage API, applies emergency safety rules, and stores users, patient profiles, and chat history in SQLite.
 
+Demo video: [Watch the walkthrough](https://drive.google.com/file/d/1gA6yqnrQ-43cCQRzsVBTKGGGt8B_LVls/view?usp=share_link)
+
 ## What it includes
 
 - Flask app that serves both the frontend and backend
