@@ -6,5 +6,5 @@ class Config:
     PORT = int(os.getenv("PORT", "5000"))
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
     OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
-    ENABLE_SQLITE = os.getenv("ENABLE_SQLITE", "false").lower() == "true"
+    ENABLE_SQLITE = True
     SQLITE_PATH = os.getenv("SQLITE_PATH", "data/triage.db")

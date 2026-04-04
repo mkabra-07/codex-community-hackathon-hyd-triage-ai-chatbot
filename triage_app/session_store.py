@@ -1,33 +1,44 @@
 from copy import deepcopy
 from datetime import datetime, timezone
+from typing import Dict
 
 
 _SESSIONS = {}
 
 
-def _empty_profile():
+def _empty_profile() -> Dict[str, object]:
     return {
         "symptoms": [],
         "duration": "",
         "severity": "",
         "age": "",
+        "gender": "",
+        "height": "",
+        "weight": "",
         "existing_conditions": "",
     }
 
 
-def get_session(session_id: str) -> dict:
-    if session_id not in _SESSIONS:
-        _SESSIONS[session_id] = {
-            "id": session_id,
+def get_session(session_key: str, base_profile=None) -> dict:
+    if session_key not in _SESSIONS:
+        _SESSIONS[session_key] = {
+            "id": session_key,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "profile": _empty_profile(),
             "history": [],
         }
-    return _SESSIONS[session_id]
+
+    session = _SESSIONS[session_key]
+    if base_profile:
+        session["profile"] = {
+            **session["profile"],
+            **{key: value for key, value in base_profile.items() if value not in (None, "")},
+        }
+    return session
 
 
-def append_message(session_id: str, role: str, content: str, metadata=None) -> dict:
-    session = get_session(session_id)
+def append_message(session_key: str, role: str, content: str, metadata=None) -> dict:
+    session = get_session(session_key)
     session["history"].append(
         {
             "role": role,
@@ -39,8 +50,8 @@ def append_message(session_id: str, role: str, content: str, metadata=None) -> d
     return session
 
 
-def update_profile(session_id: str, updates=None) -> dict:
-    session = get_session(session_id)
+def update_profile(session_key: str, updates=None) -> dict:
+    session = get_session(session_key)
     updates = updates or {}
     next_profile = deepcopy(session["profile"])
 

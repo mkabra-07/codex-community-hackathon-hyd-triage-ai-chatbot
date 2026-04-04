@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}Login | AI Healthcare Triage Chatbot{% endblock %}
+
+{% block body %}
+  <main class="auth-shell">
+    <section class="auth-card">
+      <p class="eyebrow">AI-Powered Triage</p>
+      <h1>Welcome back</h1>
+      <p class="auth-subtitle">Sign in to continue your healthcare triage chat with your saved profile.</p>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for category, message in messages %}
+            <p class="flash-message flash-{{ category }}">{{ message }}</p>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+
+      <form method="post" class="auth-form">
+        <label>
+          Full name
+          <input type="text" name="name" value="{{ form_data.name }}" required />
+        </label>
+        <label>
+          Password
+          <input type="password" name="password" required />
+        </label>
+        <button type="submit">Login</button>
+      </form>
+
+      <p class="auth-link">New here? <a href="{{ url_for('register') }}">Create an account</a></p>
+    </section>
+  </main>
+{% endblock %}

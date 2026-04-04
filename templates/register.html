@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block title %}Register | AI Healthcare Triage Chatbot{% endblock %}
+
+{% block body %}
+  <main class="auth-shell">
+    <section class="auth-card">
+      <p class="eyebrow">AI-Powered Triage</p>
+      <h1>Create account</h1>
+      <p class="auth-subtitle">Keep your profile across sessions so the chatbot stops repeating personal questions.</p>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for category, message in messages %}
+            <p class="flash-message flash-{{ category }}">{{ message }}</p>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+
+      <form method="post" class="auth-form">
+        <label>
+          Full name
+          <input type="text" name="name" value="{{ form_data.name }}" required />
+        </label>
+        <label>
+          Gender
+          <select name="gender">
+            <option value="" {% if not form_data.gender %}selected{% endif %}>Prefer not to say</option>
+            <option value="female" {% if form_data.gender == 'female' %}selected{% endif %}>Female</option>
+            <option value="male" {% if form_data.gender == 'male' %}selected{% endif %}>Male</option>
+            <option value="non-binary" {% if form_data.gender == 'non-binary' %}selected{% endif %}>Non-binary</option>
+          </select>
+        </label>
+        <label>
+          Password
+          <input type="password" name="password" required />
+        </label>
+        <label>
+          Confirm password
+          <input type="password" name="confirm_password" required />
+        </label>
+        <button type="submit">Register</button>
+      </form>
+
+      <p class="auth-link">Already registered? <a href="{{ url_for('login') }}">Back to login</a></p>
+    </section>
+  </main>
+{% endblock %}

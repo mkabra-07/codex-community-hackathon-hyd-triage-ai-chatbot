@@ -1,0 +1,280 @@
+{% extends "base.html" %}
+
+{% block title %}Chat | AI Healthcare Triage Chatbot{% endblock %}
+
+{% block body %}
+  <main class="page-shell">
+    <section class="chat-card">
+      <header class="chat-header">
+        <div>
+          <p class="eyebrow">AI-Powered Triage</p>
+          <h1>Healthcare Chatbot MVP</h1>
+          <p class="logged-in-as">Logged in as {{ user.name }}</p>
+        </div>
+        <div class="header-actions">
+          <div class="status-pill">Safety first</div>
+          <form method="post" action="{{ url_for('logout') }}">
+            <button type="submit" class="ghost-button">Logout</button>
+          </form>
+        </div>
+      </header>
+
+      <div class="disclaimer-banner">
+        This is not medical advice. In an emergency, contact local emergency services immediately.
+      </div>
+
+      <section class="profile-summary">
+        <div>
+          <h2>Patient profile</h2>
+          <p>
+            Age: {{ user.age if user.age is not none else "Missing" }} |
+            Gender: {{ user.gender or "Missing" }} |
+            Height: {{ user.height if user.height is not none else "Missing" }} cm |
+            Weight: {{ user.weight if user.weight is not none else "Missing" }} kg
+          </p>
+          <p>Conditions: {{ user.existing_conditions|join(', ') if user.existing_conditions else "None recorded" }}</p>
+        </div>
+        {% if missing_fields %}
+          <span class="profile-warning">Complete your profile to avoid repeat questions</span>
+        {% endif %}
+      </section>
+
+      {% if missing_fields %}
+        <section class="profile-panel">
+          <h3>Complete your profile</h3>
+          <p class="profile-panel-copy">We will save these details and reuse them in future triage chats.</p>
+          <div class="profile-grid">
+            <label>
+              Age
+              <input id="profileAge" type="number" min="0" value="{{ user.age if user.age is not none else '' }}" />
+            </label>
+            <label>
+              Gender
+              <select id="profileGender">
+                <option value="" {% if not user.gender %}selected{% endif %}>Prefer not to say</option>
+                <option value="female" {% if user.gender == 'female' %}selected{% endif %}>Female</option>
+                <option value="male" {% if user.gender == 'male' %}selected{% endif %}>Male</option>
+                <option value="non-binary" {% if user.gender == 'non-binary' %}selected{% endif %}>Non-binary</option>
+              </select>
+            </label>
+            <label>
+              Height (cm)
+              <input id="profileHeight" type="number" min="0" step="0.1" value="{{ user.height if user.height is not none else '' }}" />
+            </label>
+            <label>
+              Weight (kg)
+              <input id="profileWeight" type="number" min="0" step="0.1" value="{{ user.weight if user.weight is not none else '' }}" />
+            </label>
+          </div>
+          <label class="conditions-field">
+            Existing conditions
+            <input
+              id="profileConditions"
+              type="text"
+              placeholder="e.g. asthma, diabetes"
+              value="{{ (user.existing_conditions or [])|join(', ') }}"
+            />
+          </label>
+          <div class="profile-actions">
+            <button type="button" id="saveProfileButton">Save profile</button>
+            <p id="profileStatus" class="profile-status"></p>
+          </div>
+        </section>
+      {% endif %}
+
+      <section class="messages" id="messages" aria-live="polite"></section>
+
+      <p class="error-text" id="errorText" hidden></p>
+
+      <form class="composer" id="chatForm">
+        <input
+          id="messageInput"
+          type="text"
+          name="message"
+          placeholder="Describe your symptoms..."
+          autocomplete="off"
+          required
+        />
+        <button type="submit" id="sendButton">Send</button>
+      </form>
+    </section>
+  </main>
+
+  <script>
+    const currentUser = {{ profile|tojson }};
+    const needsProfileCompletion = {{ 'true' if missing_fields else 'false' }};
+    const initialMessage = {
+      role: "assistant",
+      text: needsProfileCompletion
+        ? "This is not medical advice. Before we continue, please complete your saved profile so I don't keep asking the same personal questions."
+        : "This is not medical advice. I can help assess how urgent your symptoms may be and suggest next steps using your saved profile. Please describe what you're feeling in your own words."
+    };
+
+    const messagesEl = document.getElementById("messages");
+    const errorEl = document.getElementById("errorText");
+    const formEl = document.getElementById("chatForm");
+    const inputEl = document.getElementById("messageInput");
+    const sendButtonEl = document.getElementById("sendButton");
+    const saveProfileButtonEl = document.getElementById("saveProfileButton");
+    const profileStatusEl = document.getElementById("profileStatus");
+
+    let profileComplete = !needsProfileCompletion;
+    let sessionId = localStorage.getItem(`triage-session-id-{{ user.id }}`);
+    if (!sessionId) {
+      sessionId = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : `session-${Date.now()}`;
+      localStorage.setItem(`triage-session-id-{{ user.id }}`, sessionId);
+    }
+
+    renderMessage(initialMessage);
+
+    if (!profileComplete) {
+      inputEl.disabled = true;
+      sendButtonEl.disabled = true;
+    }
+
+    formEl.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const message = inputEl.value.trim();
+      if (!message || !profileComplete) {
+        return;
+      }
+
+      errorEl.hidden = true;
+      renderMessage({ role: "user", text: message });
+      inputEl.value = "";
+      setLoading(true);
+      const typingNode = renderTyping();
+
+      try {
+        const response = await fetch("/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId, message })
+        });
+
+        const payload = await response.json();
+        typingNode.remove();
+
+        if (!response.ok) {
+          throw new Error(payload.error || "Something went wrong.");
+        }
+
+        renderMessage({
+          role: "assistant",
+          text: payload.reply,
+          assessment: payload.assessment
+        });
+      } catch (error) {
+        typingNode.remove();
+        errorEl.hidden = false;
+        errorEl.textContent = error.message || "Unable to reach the triage service.";
+      } finally {
+        setLoading(false);
+      }
+    });
+
+    if (saveProfileButtonEl) {
+      saveProfileButtonEl.addEventListener("click", async () => {
+        profileStatusEl.textContent = "";
+        saveProfileButtonEl.disabled = true;
+
+        try {
+          const response = await fetch("/profile", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              age: document.getElementById("profileAge").value,
+              gender: document.getElementById("profileGender").value,
+              height: document.getElementById("profileHeight").value,
+              weight: document.getElementById("profileWeight").value,
+              existing_conditions: document.getElementById("profileConditions").value
+            })
+          });
+
+          const payload = await response.json();
+          if (!response.ok) {
+            throw new Error(payload.error || "Could not save profile.");
+          }
+
+          if (payload.missingFields.length === 0) {
+            profileComplete = true;
+            inputEl.disabled = false;
+            sendButtonEl.disabled = false;
+            profileStatusEl.textContent = "Profile saved. You can start chatting now.";
+            window.setTimeout(() => window.location.reload(), 700);
+          } else {
+            profileStatusEl.textContent = "Profile saved, but a few details are still missing.";
+          }
+        } catch (error) {
+          profileStatusEl.textContent = error.message || "Could not save profile.";
+        } finally {
+          saveProfileButtonEl.disabled = false;
+        }
+      });
+    }
+
+    function renderMessage(message) {
+      const row = document.createElement("article");
+      row.className = `bubble-row ${message.role === "user" ? "bubble-row-user" : ""}`;
+
+      const bubble = document.createElement("div");
+      bubble.className = `bubble ${message.role === "user" ? "bubble-user" : "bubble-assistant"}`;
+
+      const text = document.createElement("p");
+      text.textContent = message.text;
+      bubble.appendChild(text);
+
+      if (message.assessment) {
+        const assessmentCard = document.createElement("div");
+        assessmentCard.className = "assessment-card";
+
+        const badge = document.createElement("span");
+        badge.className = `risk-badge risk-${message.assessment.risk_level.toLowerCase()}`;
+        badge.textContent = message.assessment.risk_level;
+        assessmentCard.appendChild(badge);
+
+        const reasoning = document.createElement("p");
+        reasoning.className = "assessment-reason";
+        reasoning.textContent = message.assessment.reasoning;
+        assessmentCard.appendChild(reasoning);
+
+        if (Array.isArray(message.assessment.next_steps) && message.assessment.next_steps.length) {
+          const list = document.createElement("ul");
+          message.assessment.next_steps.forEach((step) => {
+            const item = document.createElement("li");
+            item.textContent = step;
+            list.appendChild(item);
+          });
+          assessmentCard.appendChild(list);
+        }
+
+        bubble.appendChild(assessmentCard);
+      }
+
+      row.appendChild(bubble);
+      messagesEl.appendChild(row);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return row;
+    }
+
+    function renderTyping() {
+      const row = document.createElement("article");
+      row.className = "bubble-row";
+
+      const bubble = document.createElement("div");
+      bubble.className = "bubble bubble-assistant bubble-typing";
+      bubble.innerHTML = "<span></span><span></span><span></span>";
+
+      row.appendChild(bubble);
+      messagesEl.appendChild(row);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+      return row;
+    }
+
+    function setLoading(isLoading) {
+      inputEl.disabled = isLoading || !profileComplete;
+      sendButtonEl.disabled = isLoading || !profileComplete;
+      sendButtonEl.textContent = isLoading ? "Sending..." : "Send";
+    }
+  </script>
+{% endblock %}

@@ -10,6 +10,7 @@ Your job is to assess urgency and recommend next steps, not diagnose.
 You must be cautious, conservative, and prioritize safety over completeness.
 Never provide a diagnosis. If uncertain, prefer escalation to a clinician.
 Ask focused follow-up questions when key information is missing.
+Use the patient profile provided to you in context. Do not ask again for profile details that are already known.
 
 You must return valid JSON only with this exact shape:
 {
@@ -52,6 +53,12 @@ def extract_triage_assessment(
             {
                 "role": "user",
                 "content": (
+                    "Patient profile:\n"
+                    f"Age: {profile.get('age', 'unknown')}\n"
+                    f"Gender: {profile.get('gender', 'unknown')}\n"
+                    f"Height: {profile.get('height', 'unknown')}\n"
+                    f"Weight: {profile.get('weight', 'unknown')}\n"
+                    f"Conditions: {profile.get('existing_conditions', 'unknown')}\n\n"
                     "Existing collected facts:\n"
                     f"{json.dumps(profile, indent=2)}\n\n"
                     "Recent conversation:\n"
